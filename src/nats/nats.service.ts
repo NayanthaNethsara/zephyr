@@ -130,13 +130,13 @@ export class NatsService implements OnModuleInit, OnModuleDestroy {
             new TextDecoder().decode(message.data),
           ) as unknown;
           await handler(payload);
-          await message.ack();
+          message.ack();
         } catch (error) {
           this.logger.error(
             `Failed to process JetStream message on ${subject}`,
             error instanceof Error ? error.stack : undefined,
           );
-          await message.nak();
+          message.nak();
         }
       }
     })();

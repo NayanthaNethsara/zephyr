@@ -7,11 +7,7 @@ import { WhatsAppModule } from '../whatsapp/whatsapp.module';
 
 @Module({
   imports: [ConfigModule, WhatsAppModule],
-  providers: [
-    NatsService,
-    IncomingMessageProducer,
-    OutgoingMessageConsumer,
-  ],
+  providers: [NatsService, IncomingMessageProducer, OutgoingMessageConsumer],
   exports: [IncomingMessageProducer],
 })
 export class NatsModule {}

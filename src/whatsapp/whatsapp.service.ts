@@ -231,7 +231,9 @@ export class WhatsAppService {
     });
 
     if (!mediaInfoResponse.ok) {
-      throw new Error(`Failed to get media info: ${mediaInfoResponse.statusText}`);
+      throw new Error(
+        `Failed to get media info: ${mediaInfoResponse.statusText}`,
+      );
     }
 
     const mediaInfo = (await mediaInfoResponse.json()) as {

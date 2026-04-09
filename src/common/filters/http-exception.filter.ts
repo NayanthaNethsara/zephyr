@@ -8,6 +8,11 @@ import {
 } from '@nestjs/common';
 import { Response } from 'express';
 
+type ExceptionResponsePayload = {
+  message?: string | string[];
+  error?: string;
+};
+
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(HttpExceptionFilter.name);
@@ -26,8 +31,16 @@ export class HttpExceptionFilter implements ExceptionFilter {
       const exceptionResponse = exception.getResponse();
 
       if (typeof exceptionResponse === 'object') {
-        message = (exceptionResponse as any).message || message;
-        error = (exceptionResponse as any).error || error;
+        const responsePayload =
+          exceptionResponse as ExceptionResponsePayload | null;
+        if (responsePayload?.message) {
+          message = Array.isArray(responsePayload.message)
+            ? responsePayload.message.join(', ')
+            : responsePayload.message;
+        }
+        if (responsePayload?.error) {
+          error = responsePayload.error;
+        }
       } else if (typeof exceptionResponse === 'string') {
         message = exceptionResponse;
       }
@@ -48,10 +61,12 @@ export class HttpExceptionFilter implements ExceptionFilter {
     }
 
     // Format the error response in a consistent way
+    const request = ctx.getRequest<{ url?: string }>();
+
     response.status(status).json({
       statusCode: status,
       timestamp: new Date().toISOString(),
-      path: ctx.getRequest().url,
+      path: request.url ?? '',
       message,
       error,
     });

@@ -127,7 +127,9 @@ export class WebhookService {
         await this.handleInteractiveMessage(message, metadata);
         break;
       default:
-        this.logger.log(`Ignoring non-text message type for now: ${message.type}`);
+        this.logger.log(
+          `Ignoring non-text message type for now: ${message.type}`,
+        );
     }
   }
 

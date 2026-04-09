@@ -1,0 +1,49 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: whatsapp-gateway
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+      - path: .env.example
+        required: false
+    environment:
+      PORT: 3000
+      NATS_URL: nats://nats:4222
+    depends_on:
+      nats:
+        condition: service_healthy
+    ports:
+      - '3000:3000'
+    networks:
+      - gateway-network
+
+  nats:
+    image: nats:2.10-alpine
+    container_name: nats
+    restart: unless-stopped
+    command: ['-c', '/etc/nats/nats-server.conf']
+    ports:
+      - '4222:4222'
+      - '8222:8222'
+    volumes:
+      - ./docker/nats/nats-server.conf:/etc/nats/nats-server.conf:ro
+      - nats-data:/data
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://127.0.0.1:8222/healthz']
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    networks:
+      - gateway-network
+
+volumes:
+  nats-data:
+
+networks:
+  gateway-network:
+    driver: bridge

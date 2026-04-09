@@ -24,7 +24,8 @@ async function bootstrap() {
       { parseAs: 'string' },
       (req, body, done) => {
         const raw = typeof body === 'string' ? body : body.toString('utf8');
-        req.rawBody = raw;
+        const requestWithRawBody = req as typeof req & { rawBody?: string };
+        requestWithRawBody.rawBody = raw;
         try {
           const parsed: unknown = JSON.parse(raw);
           done(null, parsed);

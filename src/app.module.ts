@@ -1,13 +1,12 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { WebhookModule } from './modules/webhook/webhook.module';
-import { WhatsAppModule } from './modules/whatsapp/whatsapp.module';
-import { HealthModule } from './modules/health/health.module';
-import { NatsModule } from './modules/nats/nats.module';
+import { WebhookModule } from './webhook/webhook.module';
+import { WhatsAppModule } from './whatsapp/whatsapp.module';
+import { HealthModule } from './health/health.module';
+import { NatsModule } from './nats/nats.module';
 import configuration from './config/configuration';
 import { validationSchema } from './config/validation';
 import { PinoAppLogger } from './common/logger';
-import { AzureModule } from './modules/azure/azure.module';
 
 @Module({
   imports: [
@@ -27,7 +26,6 @@ import { AzureModule } from './modules/azure/azure.module';
     WhatsAppModule,
     WebhookModule,
     HealthModule,
-    AzureModule,
     NatsModule,
   ],
 })

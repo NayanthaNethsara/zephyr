@@ -5,7 +5,7 @@ import {
   Interactive,
   WhatsAppApiResponse,
   WhatsAppApiError,
-} from '../../types/whatsapp.types';
+} from '../types/whatsapp.types';
 
 @Injectable()
 export class WhatsAppService {
@@ -215,40 +215,45 @@ export class WhatsAppService {
   }
 
   /**
-   * Download media file from WhatsApp
+   * Resolve the temporary download URL for a WhatsApp media asset.
    */
-  async downloadMedia(mediaId: string): Promise<Buffer> {
+  async getMediaDownloadUrl(mediaId: string): Promise<string> {
     if (!this.accessToken) {
       throw new Error('WhatsApp access token not configured');
     }
 
+    const mediaInfoUrl = `${this.baseUrl}/${mediaId}`;
+    const mediaInfoResponse = await fetch(mediaInfoUrl, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${this.accessToken}`,
+      },
+    });
+
+    if (!mediaInfoResponse.ok) {
+      throw new Error(`Failed to get media info: ${mediaInfoResponse.statusText}`);
+    }
+
+    const mediaInfo = (await mediaInfoResponse.json()) as {
+      url: string;
+      mime_type: string;
+      sha256: string;
+      file_size: number;
+    };
+
+    return mediaInfo.url;
+  }
+
+  /**
+   * Download media file from WhatsApp
+   */
+  async downloadMedia(mediaId: string): Promise<Buffer> {
     try {
-      // Step 1: Get media URL from WhatsApp
-      const mediaInfoUrl = `${this.baseUrl}/${mediaId}`;
-      const mediaInfoResponse = await fetch(mediaInfoUrl, {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${this.accessToken}`,
-        },
-      });
-
-      if (!mediaInfoResponse.ok) {
-        throw new Error(
-          `Failed to get media info: ${mediaInfoResponse.statusText}`,
-        );
-      }
-
-      const mediaInfo = (await mediaInfoResponse.json()) as {
-        url: string;
-        mime_type: string;
-        sha256: string;
-        file_size: number;
-      };
-
-      this.logger.log(`Downloading media from: ${mediaInfo.url}`);
+      const mediaUrl = await this.getMediaDownloadUrl(mediaId);
+      this.logger.log(`Downloading media from: ${mediaUrl}`);
 
       // Step 2: Download the actual file
-      const fileResponse = await fetch(mediaInfo.url, {
+      const fileResponse = await fetch(mediaUrl, {
         method: 'GET',
         headers: {
           Authorization: `Bearer ${this.accessToken}`,

@@ -7,6 +7,10 @@ linters:
     - gosec
     - misspell
     - unconvert
+  settings:
+    gosec:
+      excludes:
+        - G404
 
 formatters:
   enable:

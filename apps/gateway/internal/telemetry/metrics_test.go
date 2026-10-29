@@ -86,6 +86,18 @@ func TestRecordedMetricsAreExposed(t *testing.T) {
 			},
 		},
 		{
+			name: "send results are counted by type and result",
+			record: func(m *Metrics) {
+				m.SendResult("text", "sent", 120*time.Millisecond)
+				m.SendResult("text", "window_closed", 80*time.Millisecond)
+			},
+			want: []string{
+				`zephyr_send_requests_total{result="sent",type="text"} 1`,
+				`zephyr_send_requests_total{result="window_closed",type="text"} 1`,
+				`zephyr_send_duration_seconds_count{type="text"} 2`,
+			},
+		},
+		{
 			name:   "go runtime metrics are always present",
 			record: func(*Metrics) {},
 			want:   []string{"go_goroutines"},

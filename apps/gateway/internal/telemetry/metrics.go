@@ -21,6 +21,8 @@ type Metrics struct {
 	deliveryLag      *prometheus.HistogramVec
 	httpRequests     *prometheus.CounterVec
 	httpDuration     *prometheus.HistogramVec
+	sendRequests     *prometheus.CounterVec
+	sendDuration     *prometheus.HistogramVec
 }
 
 func New() *Metrics {
@@ -64,6 +66,17 @@ func New() *Metrics {
 			Help:      "HTTP request duration by method and route.",
 			Buckets:   prometheus.DefBuckets,
 		}, []string{"method", "route"}),
+		sendRequests: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "send_requests_total",
+			Help:      "Message send requests by message type and result (sent or an error code).",
+		}, []string{"type", "result"}),
+		sendDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: namespace,
+			Name:      "send_duration_seconds",
+			Help:      "Time to handle a send request, including the call to Meta.",
+			Buckets:   prometheus.DefBuckets,
+		}, []string{"type"}),
 	}
 
 	m.registry.MustRegister(
@@ -76,6 +89,8 @@ func New() *Metrics {
 		m.deliveryLag,
 		m.httpRequests,
 		m.httpDuration,
+		m.sendRequests,
+		m.sendDuration,
 	)
 	return m
 }
@@ -108,4 +123,9 @@ func (m *Metrics) EventDelivered(topic string, lag time.Duration) {
 func (m *Metrics) HTTPRequest(method, route string, status int, took time.Duration) {
 	m.httpRequests.WithLabelValues(method, route, strconv.Itoa(status)).Inc()
 	m.httpDuration.WithLabelValues(method, route).Observe(took.Seconds())
+}
+
+func (m *Metrics) SendResult(messageType, result string, took time.Duration) {
+	m.sendRequests.WithLabelValues(messageType, result).Inc()
+	m.sendDuration.WithLabelValues(messageType).Observe(took.Seconds())
 }

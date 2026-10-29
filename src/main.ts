@@ -4,66 +4,40 @@ import {
   FastifyAdapter,
   NestFastifyApplication,
 } from '@nestjs/platform-fastify';
-import { VersioningType } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
-import helmet from 'helmet';
-import compression from 'compression';
+import helmet from '@fastify/helmet';
+import compression from '@fastify/compress';
 import { Logger } from 'nestjs-pino';
+import { randomUUID } from 'node:crypto';
 
 async function bootstrap() {
-  // Create Fastify adapter with custom content type parser
   const fastifyAdapter = new FastifyAdapter({
-    bodyLimit: 10485760, // 10MB limit
+    bodyLimit: 10485760,
+    genReqId: () => randomUUID(),
   });
-
-  fastifyAdapter
-    .getInstance()
-    .addContentTypeParser(
-      'application/json',
-      { parseAs: 'string' },
-      (req, body, done) => {
-        const raw = typeof body === 'string' ? body : body.toString('utf8');
-        const requestWithRawBody = req as typeof req & { rawBody?: string };
-        requestWithRawBody.rawBody = raw;
-        try {
-          const parsed: unknown = JSON.parse(raw);
-          done(null, parsed);
-        } catch (error) {
-          done(error as Error);
-        }
-      },
-    );
+  fastifyAdapter.getInstance().addHook('onRequest', async (request, reply) => {
+    reply.header('X-Request-ID', request.id);
+  });
 
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
     fastifyAdapter,
     {
-      bodyParser: false, // Disable NestJS body parser to avoid conflict
+      rawBody: true,
     },
   );
   const configService = app.get(ConfigService);
 
   app.useLogger(app.get(Logger));
-
-  // API versioning configuration
-  app.enableVersioning({
-    type: VersioningType.URI,
-  });
+  app.enableShutdownHooks();
 
   app.useGlobalFilters(new HttpExceptionFilter());
 
-  // Apply security middlewares
-  app.use(helmet());
-  app.use(compression());
+  await app.register(helmet);
+  await app.register(compression);
 
-  // Enable CORS if needed
-  app.enableCors({
-    origin: process.env.ALLOWED_ORIGINS?.split(',') || '*',
-    credentials: true,
-  });
-
-  const port = configService.get<number>('PORT', 3000);
+  const port = configService.getOrThrow<number>('port');
   await app.listen(port, '0.0.0.0');
 }
 

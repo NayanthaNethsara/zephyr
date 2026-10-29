@@ -1,19 +1,54 @@
 package api
 
 import (
+	"context"
 	"log/slog"
+	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/NayanthaNethsara/zephyr/apps/gateway/internal/core"
 )
 
-func NewRouter(logger *slog.Logger) *gin.Engine {
+type Ingestor interface {
+	Ingest(ctx context.Context, items []core.Inbound) ([]core.IngestResult, error)
+	Ready(ctx context.Context) error
+}
+
+type Recorder interface {
+	WebhookResult(result string)
+	EventIngested(eventType string, queued bool)
+	HTTPRequest(method, route string, status int, took time.Duration)
+}
+
+type Deps struct {
+	Ingestor        Ingestor
+	Recorder        Recorder
+	MetricsHandler  http.Handler
+	MetaAppSecret   string
+	MetaVerifyToken string
+	Logger          *slog.Logger
+}
+
+type handler struct {
+	deps Deps
+}
+
+func NewRouter(deps Deps) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 
+	h := &handler{deps: deps}
 	router := gin.New()
-	router.Use(gin.Recovery(), requestLogger(logger))
+	router.Use(gin.Recovery(), observe(deps.Logger, deps.Recorder))
 
-	router.GET("/healthz", healthz)
-	router.GET("/readyz", readyz)
+	router.GET("/healthz", h.healthz)
+	router.GET("/readyz", h.readyz)
+	router.GET("/webhook", h.verifyWebhook)
+	router.POST("/webhook", h.receiveWebhook)
+	if deps.MetricsHandler != nil {
+		router.GET("/metrics", gin.WrapH(deps.MetricsHandler))
+	}
 
 	return router
 }

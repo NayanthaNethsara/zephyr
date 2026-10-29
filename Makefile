@@ -55,13 +55,9 @@ docker-build: ## Build the Docker image
 up: ## Start the gateway with Docker Compose
 	docker compose up --build --detach gateway
 
-.PHONY: up-nats
-up-nats: ## Start the gateway and NATS with Docker Compose
-	docker compose --profile nats up --build --detach
-
 .PHONY: down
-down: ## Stop all Docker Compose services
-	docker compose --profile nats down
+down: ## Stop Docker Compose services
+	docker compose down
 
 .PHONY: logs
 logs: ## Follow gateway logs

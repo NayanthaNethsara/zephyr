@@ -141,7 +141,6 @@ Delivery status updates (`sent`, `delivered`, `read`, `failed`) for messages sen
 | `make test`      | Run the test suite with the race detector     |
 | `make build`     | Build `apps/gateway/bin/zephyr`               |
 | `make up`        | Start Zephyr in Docker                        |
-| `make up-nats`   | Also start NATS (for future broker transport) |
 | `make down`      | Stop all containers                           |
 | `make logs`      | Follow gateway logs                           |
 

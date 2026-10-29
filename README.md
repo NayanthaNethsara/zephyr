@@ -49,8 +49,6 @@ make logs
 make down
 ```
 
-`make up-nats` also starts a NATS server with JetStream for broker transport development.
-
 ## Configuration
 
 | Variable                 | Default                     | Description                                        |

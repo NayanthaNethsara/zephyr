@@ -24,7 +24,7 @@ apps/gateway/
   Dockerfile          Multi-stage build
   .golangci.yml       Lint configuration
 docs/                 Documentation
-docker-compose.yml    Gateway, optional NATS
+docker-compose.yml    Gateway container and data volume
 Makefile              Developer commands
 .env.example          Configuration template
 ```
@@ -145,7 +145,6 @@ Tests use fakes for the store and transport, an in-process HTTP server for deliv
 
 ```sh
 make up        # build and start the gateway
-make up-nats   # also start NATS (unused until a broker transport exists)
 make down
 ```
 

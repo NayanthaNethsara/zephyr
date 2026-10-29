@@ -1,49 +1,67 @@
+name: whatsapp-gateway
+
 services:
-  app:
+  gateway:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: whatsapp-gateway
-    restart: unless-stopped
     env_file:
       - path: .env
         required: false
-      - path: .env.example
-        required: false
     environment:
-      PORT: 3000
+      PORT: '8080'
+      REDIS_URL: redis://redis:6379
       NATS_URL: nats://nats:4222
     depends_on:
-      nats:
+      redis:
         condition: service_healthy
     ports:
-      - '3000:3000'
-    networks:
-      - gateway-network
-
-  nats:
-    image: nats:2.10-alpine
-    container_name: nats
-    restart: unless-stopped
-    command: ['-c', '/etc/nats/nats-server.conf']
-    ports:
-      - '4222:4222'
-      - '8222:8222'
-    volumes:
-      - ./docker/nats/nats-server.conf:/etc/nats/nats-server.conf:ro
-      - nats-data:/data
+      - '127.0.0.1:${WHATSAPP_GATEWAY_PORT:-8080}:8080'
     healthcheck:
-      test: ['CMD', 'wget', '--spider', '-q', 'http://127.0.0.1:8222/healthz']
-      interval: 10s
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:8080/ready').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine
+    command: ['redis-server', '--appendonly', 'yes', '--maxmemory-policy', 'noeviction']
+    ports:
+      - '127.0.0.1:${REDIS_PORT:-6379}:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
       timeout: 3s
       retries: 10
-      start_period: 5s
-    networks:
-      - gateway-network
+    restart: unless-stopped
+
+  nats:
+    image: nats:2-alpine
+    profiles: ['nats']
+    command: ['-c', '/etc/nats/nats-server.conf']
+    ports:
+      - '127.0.0.1:${NATS_PORT:-4222}:4222'
+    volumes:
+      - ./docker/nats/nats-server.conf:/etc/nats/nats-server.conf:ro
+      - nats_data:/data
+    restart: unless-stopped
 
 volumes:
-  nats-data:
-
-networks:
-  gateway-network:
-    driver: bridge
+  redis_data:
+  nats_data:

@@ -9,8 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus/testutil"
-
 	"github.com/NayanthaNethsara/zephyr/apps/gateway/internal/store"
 )
 
@@ -35,37 +33,77 @@ func scrape(t *testing.T, m *Metrics) string {
 }
 
 func TestRecordedMetricsAreExposed(t *testing.T) {
-	m := New()
-
-	m.WebhookResult("accepted")
-	m.WebhookResult("accepted")
-	m.WebhookResult("invalid_signature")
-	m.EventIngested("message.inbound", true)
-	m.EventIngested("message.inbound", false)
-	m.DeliveryAttempt("wa.inbound", "success", 40*time.Millisecond)
-	m.DeliveryAttempt("wa.inbound", "retry", time.Second)
-	m.EventDelivered("wa.inbound", 3*time.Second)
-	m.HTTPRequest("POST", "/webhook", 200, 5*time.Millisecond)
-
-	if got := testutil.ToFloat64(m.webhookRequests.WithLabelValues("accepted")); got != 2 {
-		t.Errorf("accepted webhook requests = %v, want 2", got)
+	tests := []struct {
+		name   string
+		record func(m *Metrics)
+		want   []string
+	}{
+		{
+			name: "webhook outcomes are counted by result",
+			record: func(m *Metrics) {
+				m.WebhookResult("accepted")
+				m.WebhookResult("accepted")
+				m.WebhookResult("invalid_signature")
+			},
+			want: []string{
+				`zephyr_webhook_requests_total{result="accepted"} 2`,
+				`zephyr_webhook_requests_total{result="invalid_signature"} 1`,
+			},
+		},
+		{
+			name: "ingested events are split into queued and duplicate",
+			record: func(m *Metrics) {
+				m.EventIngested("message.inbound", true)
+				m.EventIngested("message.inbound", false)
+			},
+			want: []string{
+				`zephyr_events_ingested_total{outcome="queued",type="message.inbound"} 1`,
+				`zephyr_events_ingested_total{outcome="duplicate",type="message.inbound"} 1`,
+			},
+		},
+		{
+			name: "delivery attempts and lag are recorded",
+			record: func(m *Metrics) {
+				m.DeliveryAttempt("wa.inbound", "success", 40*time.Millisecond)
+				m.DeliveryAttempt("wa.inbound", "retry", time.Second)
+				m.EventDelivered("wa.inbound", 3*time.Second)
+			},
+			want: []string{
+				`zephyr_delivery_attempts_total{result="success",topic="wa.inbound"} 1`,
+				`zephyr_delivery_attempts_total{result="retry",topic="wa.inbound"} 1`,
+				`zephyr_delivery_duration_seconds_count{result="retry",topic="wa.inbound"} 1`,
+				`zephyr_delivery_lag_seconds_count{topic="wa.inbound"} 1`,
+			},
+		},
+		{
+			name: "http requests are counted by route and status",
+			record: func(m *Metrics) {
+				m.HTTPRequest("POST", "/webhook", 200, 5*time.Millisecond)
+			},
+			want: []string{
+				`zephyr_http_requests_total{method="POST",route="/webhook",status="200"} 1`,
+				`zephyr_http_request_duration_seconds_count{method="POST",route="/webhook"} 1`,
+			},
+		},
+		{
+			name:   "go runtime metrics are always present",
+			record: func(*Metrics) {},
+			want:   []string{"go_goroutines"},
+		},
 	}
-	if got := testutil.ToFloat64(m.eventsIngested.WithLabelValues("message.inbound", "duplicate")); got != 1 {
-		t.Errorf("duplicate events = %v, want 1", got)
-	}
 
-	body := scrape(t, m)
-	for _, want := range []string{
-		`zephyr_webhook_requests_total{result="invalid_signature"} 1`,
-		`zephyr_events_ingested_total{outcome="queued",type="message.inbound"} 1`,
-		`zephyr_delivery_attempts_total{result="retry",topic="wa.inbound"} 1`,
-		`zephyr_delivery_lag_seconds_count{topic="wa.inbound"} 1`,
-		`zephyr_http_requests_total{method="POST",route="/webhook",status="200"} 1`,
-		"go_goroutines",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("scrape output missing %q", want)
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := New()
+			tt.record(m)
+
+			body := scrape(t, m)
+			for _, want := range tt.want {
+				if !strings.Contains(body, want) {
+					t.Errorf("scrape output missing %q", want)
+				}
+			}
+		})
 	}
 }
 

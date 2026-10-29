@@ -106,21 +106,30 @@ func TestHealthEndpoints(t *testing.T) {
 }
 
 func TestRequestsGetIDAndAreRecorded(t *testing.T) {
-	recorder := &fakeRecorder{}
-	router := newRecordingRouter(&fakeIngestor{}, recorder)
-
-	for _, path := range []string{"/healthz", "/missing"} {
-		rec := httptest.NewRecorder()
-		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
-
-		if id := rec.Header().Get("X-Request-Id"); !strings.HasPrefix(id, "req_") {
-			t.Errorf("%s X-Request-Id = %q", path, id)
-		}
+	tests := []struct {
+		name         string
+		path         string
+		wantRecorded string
+	}{
+		{name: "known route", path: "/healthz", wantRecorded: "GET /healthz 200"},
+		{name: "unknown route is grouped as unmatched", path: "/missing", wantRecorded: "GET unmatched 404"},
 	}
 
-	want := []string{"GET /healthz 200", "GET unmatched 404"}
-	if len(recorder.requests) != 2 || recorder.requests[0] != want[0] || recorder.requests[1] != want[1] {
-		t.Fatalf("recorded requests = %v, want %v", recorder.requests, want)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := &fakeRecorder{}
+			router := newRecordingRouter(&fakeIngestor{}, recorder)
+
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tt.path, nil))
+
+			if id := rec.Header().Get("X-Request-Id"); !strings.HasPrefix(id, "req_") {
+				t.Errorf("X-Request-Id = %q", id)
+			}
+			if len(recorder.requests) != 1 || recorder.requests[0] != tt.wantRecorded {
+				t.Errorf("recorded requests = %v, want [%s]", recorder.requests, tt.wantRecorded)
+			}
+		})
 	}
 }
 

@@ -38,107 +38,114 @@ func (f *fakeStore) Ping(context.Context) error {
 	return f.pingErr
 }
 
-func TestIngestBuildsOutboxRecords(t *testing.T) {
+func TestIngest(t *testing.T) {
 	now := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
 	occurred := now.Add(-time.Minute)
-	fake := &fakeStore{}
-	service := NewService(fake, "wa", 48*time.Hour)
-	service.now = func() time.Time { return now }
+	storeDown := errors.New("disk full")
 
-	items := []Inbound{
-		{
-			Type:          EventMessageInbound,
-			MessageID:     "wamid.1",
-			Subtype:       "text",
-			DedupKey:      "msg:wamid.1",
-			PartitionKey:  "94770000000",
-			PhoneNumberID: "111",
-			WABAID:        "222",
-			OccurredAt:    occurred,
-			Data:          json.RawMessage(`{"wamid":"wamid.1"}`),
-		},
-		{
-			Type:         EventMessageStatus,
-			DedupKey:     "status:wamid.2:read",
-			PartitionKey: "94771111111",
-			Data:         json.RawMessage(`{"wamid":"wamid.2"}`),
-		},
-	}
-
-	results, err := service.Ingest(context.Background(), items)
-	if err != nil {
-		t.Fatalf("Ingest() error = %v", err)
-	}
-	if len(results) != 2 || len(fake.saved) != 2 {
-		t.Fatalf("results = %d, records = %d, want 2", len(results), len(fake.saved))
+	type wantItem struct {
+		topic       string
+		key         string
+		eventType   EventType
+		occurredAt  time.Time
+		isQueued    bool
+		maskedPhone string
 	}
 
 	tests := []struct {
-		index     int
-		wantTopic string
-		wantKey   string
-		wantType  EventType
-		wantTime  time.Time
+		name       string
+		items      []Inbound
+		duplicates map[string]bool
+		saveErr    error
+		want       []wantItem
+		wantErr    error
 	}{
-		{index: 0, wantTopic: "wa.inbound", wantKey: "94770000000", wantType: EventMessageInbound, wantTime: occurred},
-		{index: 1, wantTopic: "wa.status", wantKey: "94771111111", wantType: EventMessageStatus, wantTime: now},
+		{
+			name: "inbound message uses the inbound topic and its own timestamp",
+			items: []Inbound{{
+				Type: EventMessageInbound, MessageID: "wamid.1", Subtype: "text", DedupKey: "msg:wamid.1",
+				PartitionKey: "94770000000", PhoneNumberID: "111", WABAID: "222", OccurredAt: occurred,
+				Data: json.RawMessage(`{"wamid":"wamid.1"}`),
+			}},
+			want: []wantItem{{topic: "wa.inbound", key: "94770000000", eventType: EventMessageInbound, occurredAt: occurred, isQueued: true, maskedPhone: "9477*****00"}},
+		},
+		{
+			name: "status without a timestamp falls back to now and uses the status topic",
+			items: []Inbound{{
+				Type: EventMessageStatus, MessageID: "wamid.2", Subtype: "read", DedupKey: "status:wamid.2:read",
+				PartitionKey: "94771111111", Data: json.RawMessage(`{"wamid":"wamid.2"}`),
+			}},
+			want: []wantItem{{topic: "wa.status", key: "94771111111", eventType: EventMessageStatus, occurredAt: now, isQueued: true, maskedPhone: "9477*****11"}},
+		},
+		{
+			name: "duplicate is reported without an event id",
+			items: []Inbound{
+				{Type: EventMessageInbound, MessageID: "wamid.new", DedupKey: "msg:wamid.new", PartitionKey: "94770000000"},
+				{Type: EventMessageInbound, MessageID: "wamid.dup", DedupKey: "msg:wamid.dup", PartitionKey: "94770000000"},
+			},
+			duplicates: map[string]bool{"msg:wamid.dup": true},
+			want: []wantItem{
+				{topic: "wa.inbound", key: "94770000000", eventType: EventMessageInbound, occurredAt: now, isQueued: true, maskedPhone: "9477*****00"},
+				{topic: "wa.inbound", key: "94770000000", eventType: EventMessageInbound, occurredAt: now, isQueued: false, maskedPhone: "9477*****00"},
+			},
+		},
+		{
+			name:    "store failure is returned",
+			items:   []Inbound{{Type: EventMessageInbound, DedupKey: "k"}},
+			saveErr: storeDown,
+			wantErr: storeDown,
+		},
 	}
+
 	for _, tt := range tests {
-		record := fake.saved[tt.index]
-		if record.Entry.Topic != tt.wantTopic || record.Entry.Key != tt.wantKey {
-			t.Errorf("record %d topic/key = %s/%s, want %s/%s", tt.index, record.Entry.Topic, record.Entry.Key, tt.wantTopic, tt.wantKey)
-		}
-		if !record.DedupExpiresAt.Equal(now.Add(48 * time.Hour)) {
-			t.Errorf("record %d dedup expiry = %s", tt.index, record.DedupExpiresAt)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &fakeStore{duplicates: tt.duplicates, saveErr: tt.saveErr}
+			service := NewService(fake, "wa", 48*time.Hour)
+			service.now = func() time.Time { return now }
 
-		var envelope Envelope
-		if err := json.Unmarshal(record.Entry.Payload, &envelope); err != nil {
-			t.Fatalf("record %d payload: %v", tt.index, err)
-		}
-		if envelope.ID != record.Entry.ID || !strings.HasPrefix(envelope.ID, "evt_") {
-			t.Errorf("record %d envelope id = %q, entry id = %q", tt.index, envelope.ID, record.Entry.ID)
-		}
-		if envelope.Type != tt.wantType || !envelope.OccurredAt.Equal(tt.wantTime) {
-			t.Errorf("record %d envelope = %+v", tt.index, envelope)
-		}
-	}
-	if fake.saved[0].Entry.ID == fake.saved[1].Entry.ID {
-		t.Error("event ids must be unique")
-	}
+			results, err := service.Ingest(context.Background(), tt.items)
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("Ingest() error = %v, want %v", err, tt.wantErr)
+			}
+			if tt.wantErr != nil {
+				return
+			}
+			if len(results) != len(tt.want) || len(fake.saved) != len(tt.want) {
+				t.Fatalf("results = %d, records = %d, want %d", len(results), len(fake.saved), len(tt.want))
+			}
 
-	first := results[0]
-	if !first.IsQueued || first.EventID != fake.saved[0].Entry.ID || first.MessageID != "wamid.1" || first.Subtype != "text" || first.MaskedPhone != "9477*****00" {
-		t.Errorf("first result = %+v", first)
-	}
-}
+			seenIDs := map[string]bool{}
+			for i, want := range tt.want {
+				record := fake.saved[i]
+				result := results[i]
 
-func TestIngestReportsDuplicates(t *testing.T) {
-	fake := &fakeStore{duplicates: map[string]bool{"msg:wamid.dup": true}}
-	service := NewService(fake, "wa", time.Hour)
+				if record.Entry.Topic != want.topic || record.Entry.Key != want.key {
+					t.Errorf("item %d topic/key = %s/%s, want %s/%s", i, record.Entry.Topic, record.Entry.Key, want.topic, want.key)
+				}
+				if !record.DedupExpiresAt.Equal(now.Add(48 * time.Hour)) {
+					t.Errorf("item %d dedup expiry = %s", i, record.DedupExpiresAt)
+				}
 
-	results, err := service.Ingest(context.Background(), []Inbound{
-		{Type: EventMessageInbound, MessageID: "wamid.new", DedupKey: "msg:wamid.new", PartitionKey: "94770000000"},
-		{Type: EventMessageInbound, MessageID: "wamid.dup", DedupKey: "msg:wamid.dup", PartitionKey: "94770000000"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !results[0].IsQueued || results[0].EventID == "" {
-		t.Errorf("new result = %+v", results[0])
-	}
-	if results[1].IsQueued || results[1].EventID != "" || results[1].MessageID != "wamid.dup" {
-		t.Errorf("duplicate result = %+v", results[1])
-	}
-}
+				var envelope Envelope
+				if err := json.Unmarshal(record.Entry.Payload, &envelope); err != nil {
+					t.Fatalf("item %d payload: %v", i, err)
+				}
+				if envelope.ID != record.Entry.ID || !strings.HasPrefix(envelope.ID, "evt_") || seenIDs[envelope.ID] {
+					t.Errorf("item %d envelope id = %q (entry %q, duplicate %v)", i, envelope.ID, record.Entry.ID, seenIDs[envelope.ID])
+				}
+				seenIDs[envelope.ID] = true
+				if envelope.Type != want.eventType || !envelope.OccurredAt.Equal(want.occurredAt) {
+					t.Errorf("item %d envelope = %+v", i, envelope)
+				}
 
-func TestIngestReturnsStoreError(t *testing.T) {
-	want := errors.New("disk full")
-	service := NewService(&fakeStore{saveErr: want}, "wa", time.Hour)
-
-	_, err := service.Ingest(context.Background(), []Inbound{{Type: EventMessageInbound, DedupKey: "k"}})
-	if !errors.Is(err, want) {
-		t.Fatalf("Ingest() error = %v, want %v", err, want)
+				if result.IsQueued != want.isQueued || result.MaskedPhone != want.maskedPhone || result.MessageID != tt.items[i].MessageID {
+					t.Errorf("item %d result = %+v", i, result)
+				}
+				if wantEventID := want.isQueued; (result.EventID != "") != wantEventID || (want.isQueued && result.EventID != record.Entry.ID) {
+					t.Errorf("item %d event id = %q, queued %v", i, result.EventID, want.isQueued)
+				}
+			}
+		})
 	}
 }
 

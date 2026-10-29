@@ -91,15 +91,27 @@ func TestReceiveWebhook(t *testing.T) {
 }
 
 func TestReceiveWebhookRecordsQueuedAndDuplicateEvents(t *testing.T) {
-	ingestor := &fakeIngestor{duplicates: map[string]bool{"msg:wamid.1": true}}
-	recorder := &fakeRecorder{}
-	router := newRecordingRouter(ingestor, recorder)
+	tests := []struct {
+		name       string
+		duplicates map[string]bool
+		wantEvent  string
+	}{
+		{name: "new message is recorded as queued", duplicates: nil, wantEvent: "message.inbound:queued"},
+		{name: "repeated message is recorded as duplicate", duplicates: map[string]bool{"msg:wamid.1": true}, wantEvent: "message.inbound:duplicate"},
+	}
 
-	request := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(validWebhookBody))
-	request.Header.Set("X-Hub-Signature-256", signed(validWebhookBody))
-	router.ServeHTTP(httptest.NewRecorder(), request)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := &fakeRecorder{}
+			router := newRecordingRouter(&fakeIngestor{duplicates: tt.duplicates}, recorder)
 
-	if len(recorder.events) != 1 || recorder.events[0] != "message.inbound:duplicate" {
-		t.Fatalf("recorded events = %v, want [message.inbound:duplicate]", recorder.events)
+			request := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(validWebhookBody))
+			request.Header.Set("X-Hub-Signature-256", signed(validWebhookBody))
+			router.ServeHTTP(httptest.NewRecorder(), request)
+
+			if len(recorder.events) != 1 || recorder.events[0] != tt.wantEvent {
+				t.Fatalf("recorded events = %v, want [%s]", recorder.events, tt.wantEvent)
+			}
+		})
 	}
 }

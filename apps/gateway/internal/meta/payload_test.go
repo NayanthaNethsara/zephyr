@@ -2,6 +2,7 @@ package meta
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 
@@ -38,75 +39,95 @@ const statusPayload = `{
   }]
 }`
 
-func TestParseWebhookMessage(t *testing.T) {
-	items, err := ParseWebhook([]byte(messagePayload))
-	if err != nil {
-		t.Fatalf("ParseWebhook() error = %v", err)
-	}
-	if len(items) != 1 {
-		t.Fatalf("items = %d, want 1", len(items))
-	}
-
-	item := items[0]
-	if item.MessageID != "wamid.IN1" || item.Subtype != "text" {
-		t.Errorf("message id/subtype = %s/%s", item.MessageID, item.Subtype)
-	}
-	if item.Type != core.EventMessageInbound || item.DedupKey != "msg:wamid.IN1" {
-		t.Errorf("type/dedup = %s/%s", item.Type, item.DedupKey)
-	}
-	if item.PartitionKey != "94770000000" || item.PhoneNumberID != "PNID1" || item.WABAID != "WABA1" {
-		t.Errorf("identifiers = %+v", item)
-	}
-	if want := time.Unix(1790000000, 0).UTC(); !item.OccurredAt.Equal(want) {
-		t.Errorf("occurred_at = %s, want %s", item.OccurredAt, want)
-	}
-
-	var data struct {
-		WAMID     string          `json:"wamid"`
-		From      string          `json:"from"`
-		Timestamp int64           `json:"timestamp"`
-		Type      string          `json:"type"`
-		Raw       json.RawMessage `json:"raw"`
-	}
-	if err := json.Unmarshal(item.Data, &data); err != nil {
-		t.Fatalf("data: %v", err)
-	}
-	if data.WAMID != "wamid.IN1" || data.From != "94770000000" || data.Type != "text" || data.Timestamp != 1790000000 {
-		t.Errorf("data = %+v", data)
-	}
-	var raw map[string]any
-	if err := json.Unmarshal(data.Raw, &raw); err != nil || raw["id"] != "wamid.IN1" {
-		t.Errorf("raw = %s, err = %v", data.Raw, err)
-	}
-}
-
-func TestParseWebhookStatus(t *testing.T) {
-	items, err := ParseWebhook([]byte(statusPayload))
-	if err != nil {
-		t.Fatalf("ParseWebhook() error = %v", err)
-	}
-	if len(items) != 1 {
-		t.Fatalf("items = %d, want 1", len(items))
+func TestParseWebhookEvents(t *testing.T) {
+	tests := []struct {
+		name          string
+		body          string
+		wantType      core.EventType
+		wantMessageID string
+		wantSubtype   string
+		wantDedupKey  string
+		wantPartition string
+		wantOccurred  time.Time
+		wantData      map[string]any
+		wantRawID     string
+	}{
+		{
+			name:          "inbound text message",
+			body:          messagePayload,
+			wantType:      core.EventMessageInbound,
+			wantMessageID: "wamid.IN1",
+			wantSubtype:   "text",
+			wantDedupKey:  "msg:wamid.IN1",
+			wantPartition: "94770000000",
+			wantOccurred:  time.Unix(1790000000, 0).UTC(),
+			wantData: map[string]any{
+				"wamid":     "wamid.IN1",
+				"from":      "94770000000",
+				"type":      "text",
+				"timestamp": float64(1790000000),
+			},
+			wantRawID: "wamid.IN1",
+		},
+		{
+			name:          "failed delivery status",
+			body:          statusPayload,
+			wantType:      core.EventMessageStatus,
+			wantMessageID: "wamid.OUT1",
+			wantSubtype:   "failed",
+			wantDedupKey:  "status:wamid.OUT1:failed",
+			wantPartition: "94771111111",
+			wantOccurred:  time.Unix(1790000100, 0).UTC(),
+			wantData: map[string]any{
+				"wamid":     "wamid.OUT1",
+				"status":    "failed",
+				"recipient": "94771111111",
+				"timestamp": float64(1790000100),
+				"errors":    []any{map[string]any{"code": float64(131047)}},
+			},
+		},
 	}
 
-	item := items[0]
-	if item.MessageID != "wamid.OUT1" || item.Subtype != "failed" {
-		t.Errorf("message id/subtype = %s/%s", item.MessageID, item.Subtype)
-	}
-	if item.Type != core.EventMessageStatus || item.DedupKey != "status:wamid.OUT1:failed" || item.PartitionKey != "94771111111" {
-		t.Errorf("item = %+v", item)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			items, err := ParseWebhook([]byte(tt.body))
+			if err != nil {
+				t.Fatalf("ParseWebhook() error = %v", err)
+			}
+			if len(items) != 1 {
+				t.Fatalf("items = %d, want 1", len(items))
+			}
 
-	var data struct {
-		WAMID  string          `json:"wamid"`
-		Status string          `json:"status"`
-		Errors json.RawMessage `json:"errors"`
-	}
-	if err := json.Unmarshal(item.Data, &data); err != nil {
-		t.Fatalf("data: %v", err)
-	}
-	if data.WAMID != "wamid.OUT1" || data.Status != "failed" || string(data.Errors) != `[{"code":131047}]` {
-		t.Errorf("data = %+v, errors = %s", data, data.Errors)
+			item := items[0]
+			if item.Type != tt.wantType || item.MessageID != tt.wantMessageID || item.Subtype != tt.wantSubtype {
+				t.Errorf("type/message/subtype = %s/%s/%s", item.Type, item.MessageID, item.Subtype)
+			}
+			if item.DedupKey != tt.wantDedupKey || item.PartitionKey != tt.wantPartition {
+				t.Errorf("dedup/partition = %s/%s", item.DedupKey, item.PartitionKey)
+			}
+			if item.PhoneNumberID != "PNID1" || item.WABAID != "WABA1" {
+				t.Errorf("phone number id / waba id = %s/%s", item.PhoneNumberID, item.WABAID)
+			}
+			if !item.OccurredAt.Equal(tt.wantOccurred) {
+				t.Errorf("occurred_at = %s, want %s", item.OccurredAt, tt.wantOccurred)
+			}
+
+			var data map[string]any
+			if err := json.Unmarshal(item.Data, &data); err != nil {
+				t.Fatalf("data: %v", err)
+			}
+			for key, want := range tt.wantData {
+				if !reflect.DeepEqual(data[key], want) {
+					t.Errorf("data[%s] = %v, want %v", key, data[key], want)
+				}
+			}
+			if tt.wantRawID != "" {
+				raw, _ := data["raw"].(map[string]any)
+				if raw["id"] != tt.wantRawID {
+					t.Errorf("raw message = %v, want id %s", data["raw"], tt.wantRawID)
+				}
+			}
+		})
 	}
 }
 

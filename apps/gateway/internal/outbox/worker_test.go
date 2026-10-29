@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strconv"
 	"testing"
 	"time"
 
@@ -91,78 +92,115 @@ func newRecordingWorker(s *fakeStore, tr *fakeTransport, rec *fakeRecorder, maxA
 	return worker
 }
 
-func TestDrainDeliversAllDueEntriesAcrossBatches(t *testing.T) {
-	s := &fakeStore{due: []store.OutboxEntry{
-		{ID: "1", Payload: []byte("a")}, {ID: "2", Payload: []byte("b")}, {ID: "3", Payload: []byte("c")},
-	}}
-	tr := &fakeTransport{}
-
-	newTestWorker(s, tr, 5).drain(context.Background())
-
-	if len(tr.published) != 3 || len(s.deleted) != 3 {
-		t.Fatalf("published = %v, deleted = %v, want 3 each", tr.published, s.deleted)
-	}
-}
-
-func TestDeliverFailureReschedulesWithBackoff(t *testing.T) {
-	s := &fakeStore{}
-	tr := &fakeTransport{err: errors.New("downstream 500")}
-	worker := newTestWorker(s, tr, 5)
-
-	worker.deliver(context.Background(), store.OutboxEntry{ID: "1", Attempts: 1, Payload: []byte("a")})
-
-	if len(s.rescheduled) != 1 || len(s.deleted) != 0 || len(s.failed) != 0 {
-		t.Fatalf("rescheduled=%v deleted=%v failed=%v", s.rescheduled, s.deleted, s.failed)
-	}
-	call := s.rescheduled[0]
-	delay := call.next.Sub(worker.now())
-	if call.attempts != 2 || call.lastErr != "downstream 500" || delay < time.Second || delay > 2*time.Second {
-		t.Fatalf("reschedule = %+v, delay = %s", call, delay)
-	}
-}
-
-func TestDeliverMarksFailedWhenAttemptsExhausted(t *testing.T) {
-	s := &fakeStore{}
-	tr := &fakeTransport{err: errors.New("still down")}
-
-	newTestWorker(s, tr, 3).deliver(context.Background(), store.OutboxEntry{ID: "1", Attempts: 2})
-
-	if len(s.failed) != 1 || len(s.rescheduled) != 0 {
-		t.Fatalf("failed=%v rescheduled=%v, want one failed", s.failed, s.rescheduled)
-	}
-}
-
-func TestDeliveryOutcomesAreRecorded(t *testing.T) {
-	created := time.Date(2026, 11, 1, 9, 59, 0, 0, time.UTC)
-
+func TestDrain(t *testing.T) {
 	tests := []struct {
 		name          string
-		publishErr    error
-		attempts      int
-		wantResult    string
-		wantDelivered bool
+		entryCount    int
+		wantPublished int
 	}{
-		{name: "success", wantResult: "success", wantDelivered: true},
-		{name: "retry", publishErr: errors.New("500"), attempts: 0, wantResult: "retry"},
-		{name: "exhausted", publishErr: errors.New("500"), attempts: 4, wantResult: "failed"},
+		{name: "nothing due", entryCount: 0, wantPublished: 0},
+		{name: "fits in one batch", entryCount: 2, wantPublished: 2},
+		{name: "spans several batches", entryCount: 5, wantPublished: 5},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			due := make([]store.OutboxEntry, tt.entryCount)
+			for i := range due {
+				due[i] = store.OutboxEntry{ID: strconv.Itoa(i), Payload: []byte("p")}
+			}
+			s := &fakeStore{due: due}
+			tr := &fakeTransport{}
+
+			newTestWorker(s, tr, 5).drain(context.Background())
+
+			if len(tr.published) != tt.wantPublished || len(s.deleted) != tt.wantPublished {
+				t.Fatalf("published = %d, deleted = %d, want %d each", len(tr.published), len(s.deleted), tt.wantPublished)
+			}
+		})
+	}
+}
+
+func TestDeliver(t *testing.T) {
+	created := time.Date(2026, 11, 1, 9, 59, 0, 0, time.UTC)
+
+	tests := []struct {
+		name            string
+		publishErr      error
+		attempts        int
+		wantResult      string
+		wantDeleted     bool
+		wantRescheduled bool
+		wantFailed      bool
+		wantAttempts    int
+	}{
+		{name: "success deletes the entry", wantResult: "success", wantDeleted: true},
+		{
+			name:            "first failure is rescheduled",
+			publishErr:      errors.New("downstream 500"),
+			attempts:        0,
+			wantResult:      "retry",
+			wantRescheduled: true,
+			wantAttempts:    1,
+		},
+		{
+			name:            "failure with attempts left is rescheduled",
+			publishErr:      errors.New("downstream 500"),
+			attempts:        3,
+			wantResult:      "retry",
+			wantRescheduled: true,
+			wantAttempts:    4,
+		},
+		{
+			name:       "last allowed attempt marks the entry failed",
+			publishErr: errors.New("still down"),
+			attempts:   4,
+			wantResult: "failed",
+			wantFailed: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &fakeStore{}
 			rec := &fakeRecorder{}
-			worker := newRecordingWorker(&fakeStore{}, &fakeTransport{err: tt.publishErr}, rec, 5)
+			worker := newRecordingWorker(s, &fakeTransport{err: tt.publishErr}, rec, 5)
 
 			worker.deliver(context.Background(), store.OutboxEntry{ID: "1", Attempts: tt.attempts, CreatedAt: created})
 
 			if len(rec.attempts) != 1 || rec.attempts[0] != tt.wantResult {
-				t.Fatalf("attempts = %v, want [%s]", rec.attempts, tt.wantResult)
+				t.Fatalf("recorded attempts = %v, want [%s]", rec.attempts, tt.wantResult)
 			}
-			if tt.wantDelivered {
+			if gotDeleted := len(s.deleted) == 1; gotDeleted != tt.wantDeleted {
+				t.Errorf("deleted = %v, want %v", s.deleted, tt.wantDeleted)
+			}
+			if gotFailed := len(s.failed) == 1; gotFailed != tt.wantFailed {
+				t.Errorf("failed = %v, want %v", s.failed, tt.wantFailed)
+			}
+			if tt.wantDeleted {
 				if len(rec.delivered) != 1 || rec.delivered[0] != time.Minute {
-					t.Fatalf("delivered lag = %v, want [1m]", rec.delivered)
+					t.Errorf("delivered lag = %v, want [1m]", rec.delivered)
 				}
 			} else if len(rec.delivered) != 0 {
-				t.Fatalf("delivered = %v, want none", rec.delivered)
+				t.Errorf("delivered = %v, want none", rec.delivered)
+			}
+			if !tt.wantRescheduled {
+				if len(s.rescheduled) != 0 {
+					t.Errorf("rescheduled = %v, want none", s.rescheduled)
+				}
+				return
+			}
+			if len(s.rescheduled) != 1 {
+				t.Fatalf("rescheduled = %v, want one call", s.rescheduled)
+			}
+			call := s.rescheduled[0]
+			delay := call.next.Sub(worker.now())
+			maxDelay := time.Second << (call.attempts - 1)
+			if call.attempts != tt.wantAttempts || call.lastErr != tt.publishErr.Error() {
+				t.Errorf("reschedule = %+v, want attempts %d", call, tt.wantAttempts)
+			}
+			if delay < maxDelay/2 || delay > maxDelay {
+				t.Errorf("delay = %s, want within [%s, %s]", delay, maxDelay/2, maxDelay)
 			}
 		})
 	}

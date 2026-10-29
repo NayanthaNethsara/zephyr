@@ -1,6 +1,6 @@
 # WA Gateway — Architecture & Implementation Spec
 
-> Working name: `wa-gateway`. Open-source, self-hosted gateway for Meta's **official WhatsApp Cloud API**, written in Go.
+> Working name: `Zephyr`. Open-source, self-hosted gateway for Meta's **official WhatsApp Cloud API**, written in Go.
 > This document is the source of truth for implementation. When something is ambiguous, prefer the simplest option that keeps the principles in §2.
 
 ---
@@ -9,27 +9,27 @@
 
 The gateway moves messages between **Meta's WhatsApp Cloud API** and the **user's systems** (bots, CRMs, workflows). It does not contain any business logic, AI, or bot behaviour. It verifies, deduplicates, rate-limits, retries and routes — nothing more.
 
-| Item | Value |
-|---|---|
-| Upstream | Meta WhatsApp Cloud API (Graph API + webhooks) |
-| Downstream | User's app via HTTP (default) or a message broker |
-| Language | Go |
-| Default deployment | Single binary + SQLite, no other services |
-| Message content | Not stored by default (pass-through) |
+| Item               | Value                                             |
+| ------------------ | ------------------------------------------------- |
+| Upstream           | Meta WhatsApp Cloud API (Graph API + webhooks)    |
+| Downstream         | User's app via HTTP (default) or a message broker |
+| Language           | Go                                                |
+| Default deployment | Single binary + SQLite, no other services         |
+| Message content    | Not stored by default (pass-through)              |
 
 ---
 
 ## 2. Principles
 
-| # | Principle | Implication |
-|---|---|---|
-| P1 | Pure gateway | No AI, bot logic, commerce, CRM, or flow builder |
-| P2 | Official API only | No WhatsApp Web / unofficial engines |
-| P3 | Pass-through | Message content is only held temporarily (outbox) and deleted after delivery |
-| P4 | Simple self-hosting | Works with one binary + SQLite; brokers and Postgres are optional |
-| P5 | Pluggable transport | `http` default; `nats`, `redis`, `rabbitmq`, `kafka` as adapters |
-| P6 | Extended from outside | Integrations happen via API and events, never in-process third-party plugins |
-| P7 | API-first | No dashboard in early phases; everything is doable via REST |
+| #   | Principle             | Implication                                                                  |
+| --- | --------------------- | ---------------------------------------------------------------------------- |
+| P1  | Pure gateway          | No AI, bot logic, commerce, CRM, or flow builder                             |
+| P2  | Official API only     | No WhatsApp Web / unofficial engines                                         |
+| P3  | Pass-through          | Message content is only held temporarily (outbox) and deleted after delivery |
+| P4  | Simple self-hosting   | Works with one binary + SQLite; brokers and Postgres are optional            |
+| P5  | Pluggable transport   | `http` default; `nats`, `redis`, `rabbitmq`, `kafka` as adapters             |
+| P6  | Extended from outside | Integrations happen via API and events, never in-process third-party plugins |
+| P7  | API-first             | No dashboard in early phases; everything is doable via REST                  |
 
 ### Non-goals
 
@@ -191,18 +191,18 @@ flowchart TB
 
 ## 4. Components
 
-| Package | Responsibility |
-|---|---|
-| `internal/meta` | Graph API client, webhook handshake (`hub.mode`, `hub.verify_token`, `hub.challenge`), HMAC verification, Meta error classification |
-| `internal/core` | Pipeline: dedup, session window, idempotency, rate limiting, routing |
-| `internal/api` | Gin REST handlers, auth middleware, request validation |
-| `internal/transport` | `Transport` interface + adapters (`http`, `nats`, `redis`, `rabbitmq`, `kafka`) |
-| `internal/outbox` | Durable outbox, retry worker, backoff, dead-letter, replay |
-| `internal/store` | Storage interface + `sqlite` and `postgres` implementations (sqlc) |
-| `internal/config` | koanf loading: env → optional YAML file |
-| `internal/crypto` | Token encryption at rest, phone hashing, HMAC signing |
-| `internal/janitor` | TTL cleanup (dedup, idempotency, sessions, delivered outbox rows) |
-| `cmd/gateway` | Entry point, wiring, graceful shutdown |
+| Package              | Responsibility                                                                                                                      |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `internal/meta`      | Graph API client, webhook handshake (`hub.mode`, `hub.verify_token`, `hub.challenge`), HMAC verification, Meta error classification |
+| `internal/core`      | Pipeline: dedup, session window, idempotency, rate limiting, routing                                                                |
+| `internal/api`       | Gin REST handlers, auth middleware, request validation                                                                              |
+| `internal/transport` | `Transport` interface + adapters (`http`, `nats`, `redis`, `rabbitmq`, `kafka`)                                                     |
+| `internal/outbox`    | Durable outbox, retry worker, backoff, dead-letter, replay                                                                          |
+| `internal/store`     | Storage interface + `sqlite` and `postgres` implementations (sqlc)                                                                  |
+| `internal/config`    | koanf loading: env → optional YAML file                                                                                             |
+| `internal/crypto`    | Token encryption at rest, phone hashing, HMAC signing                                                                               |
+| `internal/janitor`   | TTL cleanup (dedup, idempotency, sessions, delivered outbox rows)                                                                   |
+| `cmd/gateway`        | Entry point, wiring, graceful shutdown                                                                                              |
 
 ---
 
@@ -235,25 +235,25 @@ type Message interface {
 
 ### 5.2 Topics
 
-| Topic | Direction | Payload |
-|---|---|---|
-| `wa.inbound` | Gateway → user | Incoming message events |
-| `wa.status` | Gateway → user | sent / delivered / read / failed |
-| `wa.outbound` | User → gateway | Send requests |
-| `wa.results` | Gateway → user | Send outcome (accepted/rejected) |
-| `wa.dlq` | Gateway → user | Messages that exhausted retries |
+| Topic         | Direction      | Payload                          |
+| ------------- | -------------- | -------------------------------- |
+| `wa.inbound`  | Gateway → user | Incoming message events          |
+| `wa.status`   | Gateway → user | sent / delivered / read / failed |
+| `wa.outbound` | User → gateway | Send requests                    |
+| `wa.results`  | Gateway → user | Send outcome (accepted/rejected) |
+| `wa.dlq`      | Gateway → user | Messages that exhausted retries  |
 
 Topic prefix is configurable (`TRANSPORT_TOPIC_PREFIX`, default `wa`).
 
 ### 5.3 Adapter notes
 
-| Adapter | Library | Ordering | Delayed retry | DLQ |
-|---|---|---|---|---|
-| `http` | net/http | n/a | DB outbox `next_attempt_at` | `failed` state + replay API |
-| `nats` | `nats.go` (JetStream) | subject per key hash | `NakWithDelay` | publish to `wa.dlq` |
-| `redis` | `go-redis` (Streams) | stream per key hash | delayed ZSET re-queue | `wa.dlq` stream |
-| `rabbitmq` | `amqp091-go` | consistent-hash exchange | TTL retry queue + DLX | DLX queue |
-| `kafka` | `franz-go` | partition by key | retry topic(s) | `wa.dlq` topic |
+| Adapter    | Library               | Ordering                 | Delayed retry               | DLQ                         |
+| ---------- | --------------------- | ------------------------ | --------------------------- | --------------------------- |
+| `http`     | net/http              | n/a                      | DB outbox `next_attempt_at` | `failed` state + replay API |
+| `nats`     | `nats.go` (JetStream) | subject per key hash     | `NakWithDelay`              | publish to `wa.dlq`         |
+| `redis`    | `go-redis` (Streams)  | stream per key hash      | delayed ZSET re-queue       | `wa.dlq` stream             |
+| `rabbitmq` | `amqp091-go`          | consistent-hash exchange | TTL retry queue + DLX       | DLX queue                   |
+| `kafka`    | `franz-go`            | partition by key         | retry topic(s)              | `wa.dlq` topic              |
 
 Each adapter is behind a Go **build tag** (`nats`, `redis`, `rabbitmq`, `kafka`) so users can build slim binaries. Default build includes `http` + `nats`.
 
@@ -270,23 +270,23 @@ Each adapter is behind a Go **build tag** (`nats`, `redis`, `rabbitmq`, `kafka`)
   "occurred_at": "2026-10-25T10:15:00Z",
   "phone_number_id": "123456789",
   "waba_id": "987654321",
-  "data": { }
+  "data": {}
 }
 ```
 
-| `type` | `data` |
-|---|---|
-| `message.inbound` | Normalised inbound message + original Meta payload under `raw` |
-| `message.status` | `{ wamid, status, recipient, timestamp, errors? }` |
-| `message.result` | `{ correlation_id, idempotency_key, status: "accepted" \| "rejected", wamid?, error? }` |
+| `type`            | `data`                                                                                  |
+| ----------------- | --------------------------------------------------------------------------------------- |
+| `message.inbound` | Normalised inbound message + original Meta payload under `raw`                          |
+| `message.status`  | `{ wamid, status, recipient, timestamp, errors? }`                                      |
+| `message.result`  | `{ correlation_id, idempotency_key, status: "accepted" \| "rejected", wamid?, error? }` |
 
 HTTP delivery headers:
 
-| Header | Value |
-|---|---|
-| `X-Gateway-Event` | event type |
-| `X-Gateway-Delivery` | event id |
-| `X-Gateway-Signature` | `sha256=<HMAC(WEBHOOK_SIGNING_SECRET, body)>` |
+| Header                | Value                                            |
+| --------------------- | ------------------------------------------------ |
+| `X-Gateway-Event`     | event type                                       |
+| `X-Gateway-Delivery`  | event id                                         |
+| `X-Gateway-Signature` | `sha256=<HMAC(WEBHOOK_SIGNING_SECRET, body)>`    |
 | `X-Gateway-Timestamp` | unix seconds (include in HMAC to prevent replay) |
 
 ### 6.2 Outbound request (user → gateway)
@@ -313,7 +313,12 @@ HTTP delivery headers:
 ### 6.3 Error object
 
 ```json
-{ "code": "window_closed", "message": "Free-form messages require an open 24h session", "retryable": false, "meta_code": 131047 }
+{
+  "code": "window_closed",
+  "message": "Free-form messages require an open 24h session",
+  "retryable": false,
+  "meta_code": 131047
+}
 ```
 
 ---
@@ -322,22 +327,22 @@ HTTP delivery headers:
 
 All endpoints require `Authorization: Bearer <api_key>` except the Meta webhook and health.
 
-| Method | Path | Purpose | Phase |
-|---|---|---|---|
-| GET | `/webhook` | Meta verification handshake | v0.1 |
-| POST | `/webhook` | Meta events | v0.1 |
-| POST | `/v1/messages` | Send message (sync default, `?async=true`) | v0.1 |
-| GET | `/v1/messages/{id}` | Async send status | v0.1 |
-| GET | `/v1/sessions/{phone}` | Is the 24h window open? | v0.1 |
-| GET | `/v1/events/failed` | List dead-lettered events (HTTP mode) | v0.1 |
-| POST | `/v1/events/{id}/replay` | Replay a failed event | v0.1 |
-| GET | `/healthz` / `/readyz` | Liveness / readiness | v0.1 |
-| CRUD | `/v1/admin/numbers` | Manage phone numbers + tokens | v0.2 |
-| CRUD | `/v1/admin/api-keys` | Manage API keys | v0.2 |
-| CRUD | `/v1/admin/webhooks` | Manage downstream webhook URLs | v0.2 |
-| GET/POST | `/v1/templates` | List / sync templates | v0.3 |
-| POST | `/v1/media` | Upload media to Meta | v0.3 |
-| GET | `/metrics` | Prometheus | v0.3 |
+| Method   | Path                     | Purpose                                    | Phase |
+| -------- | ------------------------ | ------------------------------------------ | ----- |
+| GET      | `/webhook`               | Meta verification handshake                | v0.1  |
+| POST     | `/webhook`               | Meta events                                | v0.1  |
+| POST     | `/v1/messages`           | Send message (sync default, `?async=true`) | v0.1  |
+| GET      | `/v1/messages/{id}`      | Async send status                          | v0.1  |
+| GET      | `/v1/sessions/{phone}`   | Is the 24h window open?                    | v0.1  |
+| GET      | `/v1/events/failed`      | List dead-lettered events (HTTP mode)      | v0.1  |
+| POST     | `/v1/events/{id}/replay` | Replay a failed event                      | v0.1  |
+| GET      | `/healthz` / `/readyz`   | Liveness / readiness                       | v0.1  |
+| CRUD     | `/v1/admin/numbers`      | Manage phone numbers + tokens              | v0.2  |
+| CRUD     | `/v1/admin/api-keys`     | Manage API keys                            | v0.2  |
+| CRUD     | `/v1/admin/webhooks`     | Manage downstream webhook URLs             | v0.2  |
+| GET/POST | `/v1/templates`          | List / sync templates                      | v0.3  |
+| POST     | `/v1/media`              | Upload media to Meta                       | v0.3  |
+| GET      | `/metrics`               | Prometheus                                 | v0.3  |
 
 Headers: `Idempotency-Key` (optional, recommended), `X-Correlation-Id` (optional, echoed back).
 
@@ -401,12 +406,12 @@ erDiagram
     PHONE_NUMBERS ||--o{ SESSIONS : has
 ```
 
-| Table | Retention |
-|---|---|
-| `dedup` | `DEDUP_TTL` (default 48h) |
-| `idempotency` | `IDEMPOTENCY_TTL` (default 24h) |
-| `sessions` | 24h after `last_inbound_at` |
-| `outbox` | Deleted on success; `failed` rows kept `FAILED_RETENTION` (default 7d) |
+| Table         | Retention                                                              |
+| ------------- | ---------------------------------------------------------------------- |
+| `dedup`       | `DEDUP_TTL` (default 48h)                                              |
+| `idempotency` | `IDEMPOTENCY_TTL` (default 24h)                                        |
+| `sessions`    | 24h after `last_inbound_at`                                            |
+| `outbox`      | Deleted on success; `failed` rows kept `FAILED_RETENTION` (default 7d) |
 
 Phone numbers in `sessions` are stored as `HMAC(PHONE_HASH_KEY, phone)`.
 
@@ -416,50 +421,50 @@ Phone numbers in `sessions` are stored as `HMAC(PHONE_HASH_KEY, phone)`.
 
 Precedence: **env > YAML file (`CONFIG_FILE`) > defaults**.
 
-| Variable | Default | Description |
-|---|---|---|
-| `GATEWAY_PORT` | `8080` | HTTP port |
-| `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
-| `DB_URL` | `sqlite:///data/gateway.db` | SQLite or `postgres://...` |
-| `ENCRYPTION_KEY` | — (required) | 32-byte key for tokens at rest |
-| `PHONE_HASH_KEY` | — (required) | Key for hashing phone numbers |
-| `META_API_VERSION` | `v24.0` | Graph API version |
-| `META_APP_SECRET` | — | For webhook HMAC verification |
-| `META_VERIFY_TOKEN` | — | For webhook handshake |
-| `WA_PHONE_NUMBER_ID` | — | Single-number mode |
-| `WA_WABA_ID` | — | Single-number mode |
-| `WA_ACCESS_TOKEN` | — | Single-number mode |
-| `API_KEYS` | — | Comma-separated bootstrap keys |
-| `TRANSPORT` | `http` | `http` / `nats` / `redis` / `rabbitmq` / `kafka` |
-| `TRANSPORT_TOPIC_PREFIX` | `wa` | Topic prefix |
-| `WEBHOOK_URL` | — | Downstream URL (http mode) |
-| `WEBHOOK_SIGNING_SECRET` | — | Signs downstream webhooks |
-| `NATS_URL` | — | e.g. `nats://nats:4222` |
-| `REDIS_URL` | — | e.g. `redis://redis:6379` |
-| `RABBITMQ_URL` | — | e.g. `amqp://guest:guest@rabbitmq:5672/` |
-| `KAFKA_BROKERS` | — | Comma-separated |
-| `RETRY_MAX_ATTEMPTS` | `8` | Before dead-letter |
-| `RETRY_BASE_DELAY` | `2s` | Exponential backoff base (with jitter) |
-| `RATE_LIMIT_MPS` | `80` | Per phone number |
-| `DEDUP_TTL` | `48h` | |
-| `IDEMPOTENCY_TTL` | `24h` | |
-| `FAILED_RETENTION` | `7d` | |
+| Variable                 | Default                     | Description                                      |
+| ------------------------ | --------------------------- | ------------------------------------------------ |
+| `GATEWAY_PORT`           | `8080`                      | HTTP port                                        |
+| `LOG_LEVEL`              | `info`                      | `debug` / `info` / `warn` / `error`              |
+| `DB_URL`                 | `sqlite:///data/gateway.db` | SQLite or `postgres://...`                       |
+| `ENCRYPTION_KEY`         | — (required)                | 32-byte key for tokens at rest                   |
+| `PHONE_HASH_KEY`         | — (required)                | Key for hashing phone numbers                    |
+| `META_API_VERSION`       | `v24.0`                     | Graph API version                                |
+| `META_APP_SECRET`        | —                           | For webhook HMAC verification                    |
+| `META_VERIFY_TOKEN`      | —                           | For webhook handshake                            |
+| `WA_PHONE_NUMBER_ID`     | —                           | Single-number mode                               |
+| `WA_WABA_ID`             | —                           | Single-number mode                               |
+| `WA_ACCESS_TOKEN`        | —                           | Single-number mode                               |
+| `API_KEYS`               | —                           | Comma-separated bootstrap keys                   |
+| `TRANSPORT`              | `http`                      | `http` / `nats` / `redis` / `rabbitmq` / `kafka` |
+| `TRANSPORT_TOPIC_PREFIX` | `wa`                        | Topic prefix                                     |
+| `WEBHOOK_URL`            | —                           | Downstream URL (http mode)                       |
+| `WEBHOOK_SIGNING_SECRET` | —                           | Signs downstream webhooks                        |
+| `NATS_URL`               | —                           | e.g. `nats://nats:4222`                          |
+| `REDIS_URL`              | —                           | e.g. `redis://redis:6379`                        |
+| `RABBITMQ_URL`           | —                           | e.g. `amqp://guest:guest@rabbitmq:5672/`         |
+| `KAFKA_BROKERS`          | —                           | Comma-separated                                  |
+| `RETRY_MAX_ATTEMPTS`     | `8`                         | Before dead-letter                               |
+| `RETRY_BASE_DELAY`       | `2s`                        | Exponential backoff base (with jitter)           |
+| `RATE_LIMIT_MPS`         | `80`                        | Per phone number                                 |
+| `DEDUP_TTL`              | `48h`                       |                                                  |
+| `IDEMPOTENCY_TTL`        | `24h`                       |                                                  |
+| `FAILED_RETENTION`       | `7d`                        |                                                  |
 
 ---
 
 ## 10. Reliability & error handling
 
-| Situation | Behaviour |
-|---|---|
-| Meta webhook received | Persist to outbox, then ack 200 fast |
-| Duplicate webhook | Ack 200, drop |
-| Downstream delivery fails | Exponential backoff with jitter up to `RETRY_MAX_ATTEMPTS`, then `failed` / DLQ |
-| Meta 429 / throughput errors | Retry with backoff; respect rate limiter |
-| Meta 5xx / timeout | Retry |
-| Meta 4xx (invalid number, bad template, window closed) | No retry; return error + `message.result` rejected |
-| Free-form send outside window | Reject before calling Meta (`window_closed`) |
-| Process crash | Outbox rows survive; worker resumes on start |
-| Shutdown | Stop accepting, drain in-flight sends, close transports (graceful, timeout 30s) |
+| Situation                                              | Behaviour                                                                       |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------- |
+| Meta webhook received                                  | Persist to outbox, then ack 200 fast                                            |
+| Duplicate webhook                                      | Ack 200, drop                                                                   |
+| Downstream delivery fails                              | Exponential backoff with jitter up to `RETRY_MAX_ATTEMPTS`, then `failed` / DLQ |
+| Meta 429 / throughput errors                           | Retry with backoff; respect rate limiter                                        |
+| Meta 5xx / timeout                                     | Retry                                                                           |
+| Meta 4xx (invalid number, bad template, window closed) | No retry; return error + `message.result` rejected                              |
+| Free-form send outside window                          | Reject before calling Meta (`window_closed`)                                    |
+| Process crash                                          | Outbox rows survive; worker resumes on start                                    |
+| Shutdown                                               | Stop accepting, drain in-flight sends, close transports (graceful, timeout 30s) |
 
 Meta error codes must be mapped to `retryable: true/false` in `internal/meta/errors.go` (table-driven, easy to extend).
 
@@ -467,71 +472,71 @@ Meta error codes must be mapped to `retryable: true/false` in `internal/meta/err
 
 ## 11. Security
 
-| Area | Requirement |
-|---|---|
-| Meta webhook | Verify `X-Hub-Signature-256` (HMAC-SHA256 of raw body with app secret) using constant-time compare |
-| Downstream webhooks | Sign with `WEBHOOK_SIGNING_SECRET`, include timestamp |
-| API keys | Store only hashes; compare in constant time |
-| Tokens | Encrypt access tokens at rest (AES-GCM with `ENCRYPTION_KEY`) |
-| Phones | Hash in session table |
-| Logs | Never log message content, tokens, or full phone numbers (mask) |
-| Container | Non-root, read-only root FS, minimal image (distroless/scratch) |
+| Area                | Requirement                                                                                        |
+| ------------------- | -------------------------------------------------------------------------------------------------- |
+| Meta webhook        | Verify `X-Hub-Signature-256` (HMAC-SHA256 of raw body with app secret) using constant-time compare |
+| Downstream webhooks | Sign with `WEBHOOK_SIGNING_SECRET`, include timestamp                                              |
+| API keys            | Store only hashes; compare in constant time                                                        |
+| Tokens              | Encrypt access tokens at rest (AES-GCM with `ENCRYPTION_KEY`)                                      |
+| Phones              | Hash in session table                                                                              |
+| Logs                | Never log message content, tokens, or full phone numbers (mask)                                    |
+| Container           | Non-root, read-only root FS, minimal image (distroless/scratch)                                    |
 
 ---
 
 ## 12. Tech stack
 
-| Layer | Choice |
-|---|---|
-| Language | Go (latest stable) |
-| HTTP | Gin (+ Huma for OpenAPI, optional) |
-| DB driver | `modernc.org/sqlite` (CGO-free) / `pgx` |
-| Queries | `sqlc` (separate query sets for SQLite and Postgres if needed) |
-| Migrations | `goose` (embedded) |
-| Config | `koanf` |
-| Logging | `log/slog` (JSON) |
-| Metrics | `prometheus/client_golang` |
-| Brokers | `nats.go`, `go-redis/v9`, `amqp091-go`, `franz-go` |
-| Testing | `testing` + `testify`, `testcontainers-go` for brokers/Postgres |
-| Lint | `golangci-lint` |
-| Release | GoReleaser (binaries + Docker images) |
+| Layer      | Choice                                                          |
+| ---------- | --------------------------------------------------------------- |
+| Language   | Go (latest stable)                                              |
+| HTTP       | Gin (+ Huma for OpenAPI, optional)                              |
+| DB driver  | `modernc.org/sqlite` (CGO-free) / `pgx`                         |
+| Queries    | `sqlc` (separate query sets for SQLite and Postgres if needed)  |
+| Migrations | `goose` (embedded)                                              |
+| Config     | `koanf`                                                         |
+| Logging    | `log/slog` (JSON)                                               |
+| Metrics    | `prometheus/client_golang`                                      |
+| Brokers    | `nats.go`, `go-redis/v9`, `amqp091-go`, `franz-go`              |
+| Testing    | `testing` + `testify`, `testcontainers-go` for brokers/Postgres |
+| Lint       | `golangci-lint`                                                 |
+| Release    | GoReleaser (binaries + Docker images)                           |
 
 ---
 
 ## 13. Repository layout
 
 ```
-wa-gateway/
-├── cmd/gateway/main.go
-├── internal/
-│   ├── api/            # Gin handlers, middleware
-│   ├── config/
-│   ├── core/           # dedup, session, idempotency, rate limit, pipeline
-│   ├── crypto/
-│   ├── janitor/
-│   ├── meta/           # client, webhook verify, errors
-│   ├── outbox/
-│   ├── store/
-│   │   ├── sqlite/
-│   │   └── postgres/
-│   └── transport/
-│       ├── transport.go
-│       ├── http/
-│       ├── nats/
-│       ├── redis/
-│       ├── rabbitmq/
-│       └── kafka/
-├── migrations/
-├── api/openapi.yaml
-├── deploy/
-│   ├── docker-compose.http.yml
-│   └── docker-compose.nats.yml
+zephyr/
+├── apps/
+│   └── gateway/            # Go service (dashboard can live in apps/dashboard later)
+│       ├── cmd/gateway/main.go
+│       ├── internal/
+│       │   ├── api/        # Gin handlers, middleware
+│       │   ├── config/
+│       │   ├── core/       # dedup, session, idempotency, rate limit, pipeline
+│       │   ├── crypto/
+│       │   ├── janitor/
+│       │   ├── meta/       # client, webhook verify, errors
+│       │   ├── outbox/
+│       │   ├── store/
+│       │   │   ├── sqlite/
+│       │   │   └── postgres/
+│       │   └── transport/
+│       │       ├── transport.go
+│       │       ├── http/
+│       │       ├── nats/
+│       │       ├── redis/
+│       │       ├── rabbitmq/
+│       │       └── kafka/
+│       ├── migrations/
+│       ├── api/openapi.yaml
+│       └── Dockerfile
+├── docker-compose.yml
 ├── docs/
 │   ├── meta-setup.md
 │   ├── transports.md
 │   ├── events.md
 │   └── compliance.md
-├── Dockerfile
 ├── Makefile
 └── README.md
 ```

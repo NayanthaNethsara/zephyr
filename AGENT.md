@@ -23,6 +23,7 @@ internal/transport   Infrastructure: Transport interface and broker adapters
 internal/store       Infrastructure: Storage interface and database implementations
 internal/meta        Infrastructure: Meta Graph API client and webhook verification
 internal/outbox      Infrastructure: durable outbox and retry worker
+internal/telemetry   Infrastructure: Prometheus metrics and outbox statistics collector
 internal/core        Business rules: dedup, session window, idempotency, rate limit, routing
 internal/config      Configuration loading and validation
 internal/crypto      Encryption, hashing, and signing primitives

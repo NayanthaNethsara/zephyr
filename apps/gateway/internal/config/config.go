@@ -1,22 +1,48 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"net/url"
 	"strings"
+	"time"
 
 	"github.com/knadh/koanf/providers/confmap"
 	"github.com/knadh/koanf/providers/env/v2"
 	"github.com/knadh/koanf/v2"
 )
 
+const (
+	sqliteScheme    = "sqlite://"
+	minSecretLength = 16
+)
+
 type Config struct {
-	Port     int    `koanf:"gateway_port"`
-	LogLevel string `koanf:"log_level"`
+	Port                 int           `koanf:"gateway_port"`
+	LogLevel             string        `koanf:"log_level"`
+	DBURL                string        `koanf:"db_url"`
+	MetaAppSecret        string        `koanf:"meta_app_secret"`
+	MetaVerifyToken      string        `koanf:"meta_verify_token"`
+	Transport            string        `koanf:"transport"`
+	TransportTopicPrefix string        `koanf:"transport_topic_prefix"`
+	WebhookURL           string        `koanf:"webhook_url"`
+	WebhookSigningSecret string        `koanf:"webhook_signing_secret"`
+	RetryMaxAttempts     int           `koanf:"retry_max_attempts"`
+	RetryBaseDelay       time.Duration `koanf:"retry_base_delay"`
+	DedupTTL             time.Duration `koanf:"dedup_ttl"`
+	FailedRetention      time.Duration `koanf:"failed_retention"`
 }
 
 var defaults = map[string]any{
-	"gateway_port": 8080,
-	"log_level":    "info",
+	"gateway_port":           8080,
+	"log_level":              "info",
+	"db_url":                 "sqlite:///data/gateway.db",
+	"transport":              "http",
+	"transport_topic_prefix": "wa",
+	"retry_max_attempts":     8,
+	"retry_base_delay":       "2s",
+	"dedup_ttl":              "48h",
+	"failed_retention":       "168h",
 }
 
 func Load() (Config, error) {
@@ -46,13 +72,88 @@ func Load() (Config, error) {
 	return cfg, cfg.validate()
 }
 
+func (c Config) SQLitePath() string {
+	return strings.TrimPrefix(c.DBURL, sqliteScheme)
+}
+
 func (c Config) validate() error {
+	checks := []func() error{
+		c.validatePort,
+		c.validateLogLevel,
+		c.validateMeta,
+		c.validateStorage,
+		c.validateTransport,
+		c.validateRetry,
+	}
+	for _, check := range checks {
+		if err := check(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c Config) validatePort() error {
 	if c.Port < 1 || c.Port > 65535 {
 		return fmt.Errorf("GATEWAY_PORT must be between 1 and 65535, got %d", c.Port)
 	}
+	return nil
+}
+
+func (c Config) validateLogLevel() error {
 	switch c.LogLevel {
 	case "debug", "info", "warn", "error":
 		return nil
 	}
 	return fmt.Errorf("LOG_LEVEL must be one of debug, info, warn, error, got %q", c.LogLevel)
+}
+
+func (c Config) validateMeta() error {
+	if c.MetaAppSecret == "" {
+		return errors.New("META_APP_SECRET is required")
+	}
+	if len(c.MetaVerifyToken) < minSecretLength {
+		return fmt.Errorf("META_VERIFY_TOKEN must be at least %d characters", minSecretLength)
+	}
+	return nil
+}
+
+func (c Config) validateStorage() error {
+	if !strings.HasPrefix(c.DBURL, sqliteScheme) || c.SQLitePath() == "" {
+		return fmt.Errorf("DB_URL must be a sqlite:// URL, got %q", c.DBURL)
+	}
+	return nil
+}
+
+func (c Config) validateTransport() error {
+	if c.Transport != "http" {
+		return fmt.Errorf("TRANSPORT %q is not supported yet, use http", c.Transport)
+	}
+	if c.TransportTopicPrefix == "" {
+		return errors.New("TRANSPORT_TOPIC_PREFIX must not be empty")
+	}
+	target, err := url.Parse(c.WebhookURL)
+	if err != nil || (target.Scheme != "http" && target.Scheme != "https") || target.Host == "" {
+		return fmt.Errorf("WEBHOOK_URL must be an http or https URL, got %q", c.WebhookURL)
+	}
+	if len(c.WebhookSigningSecret) < minSecretLength {
+		return fmt.Errorf("WEBHOOK_SIGNING_SECRET must be at least %d characters", minSecretLength)
+	}
+	return nil
+}
+
+func (c Config) validateRetry() error {
+	if c.RetryMaxAttempts < 1 {
+		return fmt.Errorf("RETRY_MAX_ATTEMPTS must be at least 1, got %d", c.RetryMaxAttempts)
+	}
+	for name, value := range map[string]time.Duration{
+		"RETRY_BASE_DELAY": c.RetryBaseDelay,
+		"DEDUP_TTL":        c.DedupTTL,
+		"FAILED_RETENTION": c.FailedRetention,
+	} {
+		if value <= 0 {
+			return fmt.Errorf("%s must be greater than zero", name)
+		}
+	}
+	return nil
 }

@@ -11,7 +11,7 @@ import (
 func (s *Store) ListDue(ctx context.Context, now time.Time, limit int) ([]store.OutboxEntry, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, topic, msg_key, payload, attempts, next_attempt_at, created_at, last_error
-		FROM outbox
+		FROM outbox_entries
 		WHERE state = ? AND next_attempt_at <= ?
 		ORDER BY created_at, id
 		LIMIT ?`,
@@ -43,7 +43,7 @@ func (s *Store) ListDue(ctx context.Context, now time.Time, limit int) ([]store.
 }
 
 func (s *Store) Delete(ctx context.Context, id string) error {
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM outbox WHERE id = ?`, id); err != nil {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM outbox_entries WHERE id = ?`, id); err != nil {
 		return fmt.Errorf("delete outbox entry: %w", err)
 	}
 	return nil
@@ -51,7 +51,7 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 
 func (s *Store) Reschedule(ctx context.Context, id string, attempts int, nextAttemptAt time.Time, lastError string) error {
 	_, err := s.db.ExecContext(ctx, `
-		UPDATE outbox
+		UPDATE outbox_entries
 		SET attempts = ?, next_attempt_at = ?, last_error = ?, updated_at = ?
 		WHERE id = ?`,
 		attempts, toMillis(nextAttemptAt), lastError, toMillis(time.Now()), id,
@@ -64,7 +64,7 @@ func (s *Store) Reschedule(ctx context.Context, id string, attempts int, nextAtt
 
 func (s *Store) MarkFailed(ctx context.Context, id string, attempts int, lastError string, at time.Time) error {
 	_, err := s.db.ExecContext(ctx, `
-		UPDATE outbox
+		UPDATE outbox_entries
 		SET state = ?, attempts = ?, last_error = ?, updated_at = ?
 		WHERE id = ?`,
 		store.StateFailed, attempts, lastError, toMillis(at), id,
@@ -82,11 +82,11 @@ func (s *Store) DeleteExpired(ctx context.Context, now time.Time, failedBefore t
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.ExecContext(ctx, `DELETE FROM dedup WHERE expires_at <= ?`, toMillis(now)); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM dedup_keys WHERE expires_at <= ?`, toMillis(now)); err != nil {
 		return fmt.Errorf("delete expired dedup keys: %w", err)
 	}
 	_, err = tx.ExecContext(ctx,
-		`DELETE FROM outbox WHERE state = ? AND updated_at <= ?`,
+		`DELETE FROM outbox_entries WHERE state = ? AND updated_at <= ?`,
 		store.StateFailed, toMillis(failedBefore),
 	)
 	if err != nil {

@@ -18,7 +18,7 @@ func (s *Store) OutboxStats(ctx context.Context) (store.OutboxStats, error) {
 			COALESCE(SUM(CASE WHEN state = ? THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN state = ? THEN 1 ELSE 0 END), 0),
 			MIN(CASE WHEN state = ? THEN created_at END)
-		FROM outbox`,
+		FROM outbox_entries`,
 		store.StatePending, store.StateFailed, store.StatePending,
 	).Scan(&stats.Pending, &stats.Failed, &oldest)
 	if err != nil {

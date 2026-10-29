@@ -203,11 +203,11 @@ Retry delay doubles each attempt from `RETRY_BASE_DELAY`, capped at 10 minutes, 
 
 ```mermaid
 erDiagram
-    DEDUP {
+    DEDUP_KEYS {
         text dedup_key PK
         integer expires_at
     }
-    OUTBOX {
+    OUTBOX_ENTRIES {
         text id PK
         text topic
         text msg_key
@@ -221,7 +221,7 @@ erDiagram
     }
 ```
 
-The tables are not related by a foreign key. `dedup` remembers which Meta messages have been seen. `outbox` holds events waiting for delivery and, for a retention period, events that failed.
+The tables are not related by a foreign key. `dedup_keys` remembers which Meta messages have been seen. `outbox_entries` holds events waiting for delivery and, for a retention period, events that failed.
 
 | Dedup key                 | Meaning                                              |
 | ------------------------- | ---------------------------------------------------- |

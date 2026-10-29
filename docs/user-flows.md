@@ -151,14 +151,14 @@ Events that exhaust their attempts stay in the outbox as `failed` for `FAILED_RE
 
 ```sh
 sqlite3 data/gateway.db \
-  "SELECT id, topic, attempts, last_error, datetime(updated_at/1000,'unixepoch') FROM outbox WHERE state='failed'"
+  "SELECT id, topic, attempts, last_error, datetime(updated_at/1000,'unixepoch') FROM outbox_entries WHERE state='failed'"
 ```
 
 To retry a failed event, set it back to pending:
 
 ```sh
 sqlite3 data/gateway.db \
-  "UPDATE outbox SET state='pending', attempts=0, next_attempt_at=0 WHERE id='evt_...'"
+  "UPDATE outbox_entries SET state='pending', attempts=0, next_attempt_at=0 WHERE id='evt_...'"
 ```
 
 Do this with Zephyr stopped, or accept that it runs against a live database in WAL mode. A proper list and replay API is planned.

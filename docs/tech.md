@@ -87,15 +87,15 @@ Topics are the outbox routing names and are prepared for future broker transport
 
 ## Database
 
-Schema (`apps/gateway/migrations/00001_create_inbound_tables.sql`):
+Schema after all migrations (`apps/gateway/migrations/`). Migration `00001` created the tables as `dedup` and `outbox`, and `00002` renamed them to plural names without touching their rows:
 
 ```sql
-CREATE TABLE dedup (
+CREATE TABLE dedup_keys (
     dedup_key  TEXT PRIMARY KEY,
     expires_at INTEGER NOT NULL
 );
 
-CREATE TABLE outbox (
+CREATE TABLE outbox_entries (
     id              TEXT PRIMARY KEY,
     topic           TEXT NOT NULL,
     msg_key         TEXT NOT NULL,

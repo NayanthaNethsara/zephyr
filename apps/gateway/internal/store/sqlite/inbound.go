@@ -8,12 +8,12 @@ import (
 )
 
 const insertDedup = `
-INSERT INTO dedup (dedup_key, expires_at) VALUES (?, ?)
+INSERT INTO dedup_keys (dedup_key, expires_at) VALUES (?, ?)
 ON CONFLICT(dedup_key) DO UPDATE SET expires_at = excluded.expires_at
-WHERE dedup.expires_at <= ?`
+WHERE dedup_keys.expires_at <= ?`
 
 const insertOutbox = `
-INSERT INTO outbox (id, topic, msg_key, payload, attempts, next_attempt_at, state, last_error, created_at, updated_at)
+INSERT INTO outbox_entries (id, topic, msg_key, payload, attempts, next_attempt_at, state, last_error, created_at, updated_at)
 VALUES (?, ?, ?, ?, 0, ?, ?, '', ?, ?)`
 
 func (s *Store) SaveInbound(ctx context.Context, records []store.InboundRecord) ([]string, error) {

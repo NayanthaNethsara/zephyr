@@ -43,6 +43,11 @@ type fakeRecorder struct {
 	webhookResults []string
 	events         []string
 	requests       []string
+	sends          []string
+}
+
+func (f *fakeRecorder) SendResult(messageType, result string, _ time.Duration) {
+	f.sends = append(f.sends, messageType+":"+result)
 }
 
 func (f *fakeRecorder) WebhookResult(result string) {

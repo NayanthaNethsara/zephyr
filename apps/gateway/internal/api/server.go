@@ -19,6 +19,7 @@ type Ingestor interface {
 type Recorder interface {
 	WebhookResult(result string)
 	EventIngested(eventType string, isQueued bool)
+	SendResult(messageType, result string, took time.Duration)
 	HTTPRequest(method, route string, status int, took time.Duration)
 }
 
@@ -26,6 +27,8 @@ type Deps struct {
 	Ingestor        Ingestor
 	Recorder        Recorder
 	MetricsHandler  http.Handler
+	Sender          MessageSender
+	APIKeys         []string
 	MetaAppSecret   string
 	MetaVerifyToken string
 	Logger          *slog.Logger
@@ -46,6 +49,10 @@ func NewRouter(deps Deps) *gin.Engine {
 	router.GET("/readyz", h.readyz)
 	router.GET("/webhook", h.verifyWebhook)
 	router.POST("/webhook", h.receiveWebhook)
+	if deps.Sender != nil {
+		v1 := router.Group("/v1", requireAPIKey(newKeyRing(deps.APIKeys), deps.Logger))
+		v1.POST("/messages", h.sendMessage)
+	}
 	if deps.MetricsHandler != nil {
 		router.GET("/metrics", gin.WrapH(deps.MetricsHandler))
 	}

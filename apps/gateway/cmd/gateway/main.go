@@ -16,6 +16,7 @@ import (
 	"github.com/NayanthaNethsara/zephyr/apps/gateway/internal/config"
 	"github.com/NayanthaNethsara/zephyr/apps/gateway/internal/core"
 	"github.com/NayanthaNethsara/zephyr/apps/gateway/internal/janitor"
+	"github.com/NayanthaNethsara/zephyr/apps/gateway/internal/meta"
 	"github.com/NayanthaNethsara/zephyr/apps/gateway/internal/outbox"
 	"github.com/NayanthaNethsara/zephyr/apps/gateway/internal/store/sqlite"
 	"github.com/NayanthaNethsara/zephyr/apps/gateway/internal/telemetry"
@@ -28,6 +29,7 @@ const (
 	pollInterval    = 500 * time.Millisecond
 	batchSize       = 50
 	publishTimeout  = 10 * time.Second
+	graphBaseURL    = "https://graph.facebook.com"
 	readTimeout     = 30 * time.Second
 	writeTimeout    = 30 * time.Second
 	idleTimeout     = 2 * time.Minute
@@ -74,6 +76,16 @@ func run() error {
 	}, metrics, logger)
 	sweeper := janitor.New(db, janitorInterval, cfg.FailedRetention, logger)
 
+	var messageSender api.MessageSender
+	if cfg.SendingEnabled() {
+		messageSender = core.NewSender(
+			meta.NewClient(graphBaseURL, cfg.MetaAPIVersion, cfg.WAAccessToken),
+			db,
+			cfg.WAPhoneNumberID,
+			cfg.IdempotencyTTL,
+		)
+	}
+
 	var background sync.WaitGroup
 	for _, job := range []func(context.Context){worker.Run, sweeper.Run} {
 		background.Add(1)
@@ -90,6 +102,8 @@ func run() error {
 			Ingestor:        service,
 			Recorder:        metrics,
 			MetricsHandler:  metrics.Handler(),
+			Sender:          messageSender,
+			APIKeys:         cfg.APIKeyList(),
 			MetaAppSecret:   cfg.MetaAppSecret,
 			MetaVerifyToken: cfg.MetaVerifyToken,
 			Logger:          logger,
@@ -102,7 +116,7 @@ func run() error {
 
 	serverErr := make(chan error, 1)
 	go func() {
-		logger.Info("zephyr listening", "addr", server.Addr, "transport", publisher.Name())
+		logger.Info("zephyr listening", "addr", server.Addr, "transport", publisher.Name(), "sending", cfg.SendingEnabled())
 		serverErr <- server.ListenAndServe()
 	}()
 

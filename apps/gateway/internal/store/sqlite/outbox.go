@@ -85,6 +85,9 @@ func (s *Store) DeleteExpired(ctx context.Context, now time.Time, failedBefore t
 	if _, err := tx.ExecContext(ctx, `DELETE FROM dedup_keys WHERE expires_at <= ?`, toMillis(now)); err != nil {
 		return fmt.Errorf("delete expired dedup keys: %w", err)
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM idempotency_keys WHERE expires_at <= ?`, toMillis(now)); err != nil {
+		return fmt.Errorf("delete expired idempotency keys: %w", err)
+	}
 	_, err = tx.ExecContext(ctx,
 		`DELETE FROM outbox_entries WHERE state = ? AND updated_at <= ?`,
 		store.StateFailed, toMillis(failedBefore),

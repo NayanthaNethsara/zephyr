@@ -1,0 +1,17 @@
+bin/
+dist/
+coverage.out
+*.test
+
+.env
+.env.*
+!.env.example
+
+data/
+*.db
+*.db-shm
+*.db-wal
+
+.idea
+.vscode
+.DS_Store

@@ -25,7 +25,7 @@ run: ## Run the gateway locally
 
 .PHONY: build
 build: ## Build the binary into bin/
-	cd $(GATEWAY_DIR) && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o $(BIN_DIR)/$(BINARY) $(PKG)
+	cd $(GATEWAY_DIR) && CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags="-s -w" -o $(BIN_DIR)/$(BINARY) $(PKG)
 
 .PHONY: test
 test: ## Run tests

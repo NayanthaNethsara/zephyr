@@ -113,15 +113,18 @@ func TestLoad(t *testing.T) {
 
 func TestSQLitePath(t *testing.T) {
 	tests := []struct {
+		name  string
 		dbURL string
 		want  string
 	}{
-		{dbURL: "sqlite:///data/gateway.db", want: "/data/gateway.db"},
-		{dbURL: "sqlite://./data/gateway.db", want: "./data/gateway.db"},
+		{name: "absolute path", dbURL: "sqlite:///data/gateway.db", want: "/data/gateway.db"},
+		{name: "relative path", dbURL: "sqlite://./data/gateway.db", want: "./data/gateway.db"},
 	}
 	for _, tt := range tests {
-		if got := (Config{DBURL: tt.dbURL}).SQLitePath(); got != tt.want {
-			t.Errorf("SQLitePath(%q) = %q, want %q", tt.dbURL, got, tt.want)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			if got := (Config{DBURL: tt.dbURL}).SQLitePath(); got != tt.want {
+				t.Errorf("SQLitePath(%q) = %q, want %q", tt.dbURL, got, tt.want)
+			}
+		})
 	}
 }

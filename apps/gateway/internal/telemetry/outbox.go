@@ -11,23 +11,23 @@ import (
 
 const statsTimeout = 2 * time.Second
 
-type OutboxStatsSource interface {
+type OutboxStatsReader interface {
 	OutboxStats(ctx context.Context) (store.OutboxStats, error)
 }
 
 type outboxCollector struct {
-	source     OutboxStatsSource
+	source     OutboxStatsReader
 	now        func() time.Time
 	entries    *prometheus.Desc
 	oldestAge  *prometheus.Desc
 	scrapeFail *prometheus.Desc
 }
 
-func (m *Metrics) WatchOutbox(source OutboxStatsSource) {
+func (m *Metrics) WatchOutbox(source OutboxStatsReader) {
 	m.registry.MustRegister(newOutboxCollector(source, time.Now))
 }
 
-func newOutboxCollector(source OutboxStatsSource, now func() time.Time) *outboxCollector {
+func newOutboxCollector(source OutboxStatsReader, now func() time.Time) *outboxCollector {
 	return &outboxCollector{
 		source: source,
 		now:    now,

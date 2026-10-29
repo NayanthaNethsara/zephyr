@@ -66,7 +66,7 @@ func buildResults(items []Inbound, records []store.InboundRecord, saved []string
 			Type:        item.Type,
 			Subtype:     item.Subtype,
 			MaskedPhone: MaskPhone(item.PartitionKey),
-			Queued:      isQueued,
+			IsQueued:    isQueued,
 		}
 		if isQueued {
 			results[i].EventID = id

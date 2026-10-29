@@ -15,10 +15,12 @@ const (
 	unmatchedRoute  = "unmatched"
 )
 
-var quietRoutes = map[string]bool{
-	"/healthz": true,
-	"/readyz":  true,
-	"/metrics": true,
+func isQuietRoute(route string) bool {
+	switch route {
+	case "/healthz", "/readyz", "/metrics":
+		return true
+	}
+	return false
 }
 
 func observe(logger *slog.Logger, recorder Recorder) gin.HandlerFunc {
@@ -40,7 +42,7 @@ func observe(logger *slog.Logger, recorder Recorder) gin.HandlerFunc {
 		recorder.HTTPRequest(c.Request.Method, route, status, took)
 
 		level := slog.LevelInfo
-		if quietRoutes[route] {
+		if isQuietRoute(route) {
 			level = slog.LevelDebug
 		}
 		logger.Log(c.Request.Context(), level, "request",

@@ -82,10 +82,10 @@ func (h *handler) receiveWebhook(c *gin.Context) {
 
 func (h *handler) reportResults(logger *slog.Logger, results []core.IngestResult) {
 	for _, result := range results {
-		h.deps.Recorder.EventIngested(string(result.Type), result.Queued)
+		h.deps.Recorder.EventIngested(string(result.Type), result.IsQueued)
 
 		outcome := "duplicate"
-		if result.Queued {
+		if result.IsQueued {
 			outcome = "queued"
 		}
 		logger.Info("event received",

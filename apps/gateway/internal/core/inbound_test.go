@@ -108,7 +108,7 @@ func TestIngestBuildsOutboxRecords(t *testing.T) {
 	}
 
 	first := results[0]
-	if !first.Queued || first.EventID != fake.saved[0].Entry.ID || first.MessageID != "wamid.1" || first.Subtype != "text" || first.MaskedPhone != "9477*****00" {
+	if !first.IsQueued || first.EventID != fake.saved[0].Entry.ID || first.MessageID != "wamid.1" || first.Subtype != "text" || first.MaskedPhone != "9477*****00" {
 		t.Errorf("first result = %+v", first)
 	}
 }
@@ -124,10 +124,10 @@ func TestIngestReportsDuplicates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !results[0].Queued || results[0].EventID == "" {
+	if !results[0].IsQueued || results[0].EventID == "" {
 		t.Errorf("new result = %+v", results[0])
 	}
-	if results[1].Queued || results[1].EventID != "" || results[1].MessageID != "wamid.dup" {
+	if results[1].IsQueued || results[1].EventID != "" || results[1].MessageID != "wamid.dup" {
 		t.Errorf("duplicate result = %+v", results[1])
 	}
 }
@@ -143,11 +143,22 @@ func TestIngestReturnsStoreError(t *testing.T) {
 }
 
 func TestReady(t *testing.T) {
-	want := errors.New("db down")
-	if err := NewService(&fakeStore{pingErr: want}, "wa", time.Hour).Ready(context.Background()); !errors.Is(err, want) {
-		t.Fatalf("Ready() error = %v, want %v", err, want)
+	storeDown := errors.New("db down")
+
+	tests := []struct {
+		name    string
+		pingErr error
+		wantErr error
+	}{
+		{name: "store reachable", pingErr: nil, wantErr: nil},
+		{name: "store down", pingErr: storeDown, wantErr: storeDown},
 	}
-	if err := NewService(&fakeStore{}, "wa", time.Hour).Ready(context.Background()); err != nil {
-		t.Fatalf("Ready() error = %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := NewService(&fakeStore{pingErr: tt.pingErr}, "wa", time.Hour).Ready(context.Background())
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("Ready() error = %v, want %v", err, tt.wantErr)
+			}
+		})
 	}
 }

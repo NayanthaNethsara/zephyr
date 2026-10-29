@@ -33,22 +33,24 @@ type Config struct {
 	FailedRetention      time.Duration `koanf:"failed_retention"`
 }
 
-var defaults = map[string]any{
-	"gateway_port":           8080,
-	"log_level":              "info",
-	"db_url":                 "sqlite:///data/gateway.db",
-	"transport":              "http",
-	"transport_topic_prefix": "wa",
-	"retry_max_attempts":     8,
-	"retry_base_delay":       "2s",
-	"dedup_ttl":              "48h",
-	"failed_retention":       "168h",
+func defaultValues() map[string]any {
+	return map[string]any{
+		"gateway_port":           8080,
+		"log_level":              "info",
+		"db_url":                 "sqlite:///data/gateway.db",
+		"transport":              "http",
+		"transport_topic_prefix": "wa",
+		"retry_max_attempts":     8,
+		"retry_base_delay":       "2s",
+		"dedup_ttl":              "48h",
+		"failed_retention":       "168h",
+	}
 }
 
 func Load() (Config, error) {
 	k := koanf.New(".")
 
-	if err := k.Load(confmap.Provider(defaults, "."), nil); err != nil {
+	if err := k.Load(confmap.Provider(defaultValues(), "."), nil); err != nil {
 		return Config{}, fmt.Errorf("load defaults: %w", err)
 	}
 

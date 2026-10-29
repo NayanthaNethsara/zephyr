@@ -30,9 +30,9 @@ func (f *fakeIngestor) Ingest(_ context.Context, items []core.Inbound) ([]core.I
 
 	results := make([]core.IngestResult, len(items))
 	for i, item := range items {
-		queued := !f.duplicates[item.DedupKey]
-		results[i] = core.IngestResult{Type: item.Type, MessageID: item.MessageID, Subtype: item.Subtype, Queued: queued}
-		if queued {
+		isQueued := !f.duplicates[item.DedupKey]
+		results[i] = core.IngestResult{Type: item.Type, MessageID: item.MessageID, Subtype: item.Subtype, IsQueued: isQueued}
+		if isQueued {
 			results[i].EventID = "evt_test"
 		}
 	}
@@ -49,9 +49,9 @@ func (f *fakeRecorder) WebhookResult(result string) {
 	f.webhookResults = append(f.webhookResults, result)
 }
 
-func (f *fakeRecorder) EventIngested(eventType string, queued bool) {
+func (f *fakeRecorder) EventIngested(eventType string, isQueued bool) {
 	outcome := "duplicate"
-	if queued {
+	if isQueued {
 		outcome = "queued"
 	}
 	f.events = append(f.events, eventType+":"+outcome)
@@ -125,22 +125,31 @@ func TestRequestsGetIDAndAreRecorded(t *testing.T) {
 }
 
 func TestMetricsEndpointIsOptional(t *testing.T) {
-	deps := Deps{
-		Ingestor: &fakeIngestor{},
-		Recorder: &fakeRecorder{},
-		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
-	}
+	metricsHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("metrics")) })
 
-	rec := httptest.NewRecorder()
-	NewRouter(deps).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("without handler status = %d, want 404", rec.Code)
+	tests := []struct {
+		name       string
+		handler    http.Handler
+		wantStatus int
+		wantBody   string
+	}{
+		{name: "without handler", handler: nil, wantStatus: http.StatusNotFound, wantBody: "404 page not found"},
+		{name: "with handler", handler: metricsHandler, wantStatus: http.StatusOK, wantBody: "metrics"},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			router := NewRouter(Deps{
+				Ingestor:       &fakeIngestor{},
+				Recorder:       &fakeRecorder{},
+				MetricsHandler: tt.handler,
+				Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+			})
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 
-	deps.MetricsHandler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("metrics")) })
-	rec = httptest.NewRecorder()
-	NewRouter(deps).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-	if rec.Code != http.StatusOK || rec.Body.String() != "metrics" {
-		t.Fatalf("with handler = %d %q", rec.Code, rec.Body.String())
+			if rec.Code != tt.wantStatus || rec.Body.String() != tt.wantBody {
+				t.Fatalf("response = %d %q, want %d %q", rec.Code, rec.Body.String(), tt.wantStatus, tt.wantBody)
+			}
+		})
 	}
 }

@@ -12,8 +12,6 @@ import (
 
 const namespace = "zephyr"
 
-var endToEndBuckets = []float64{0.05, 0.1, 0.5, 1, 2, 5, 10, 30, 60, 300, 900}
-
 type Metrics struct {
 	registry         *prometheus.Registry
 	webhookRequests  *prometheus.CounterVec
@@ -53,7 +51,7 @@ func New() *Metrics {
 			Namespace: namespace,
 			Name:      "delivery_lag_seconds",
 			Help:      "Time from an event being accepted to it being delivered downstream.",
-			Buckets:   endToEndBuckets,
+			Buckets:   []float64{0.05, 0.1, 0.5, 1, 2, 5, 10, 30, 60, 300, 900},
 		}, []string{"topic"}),
 		httpRequests: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: namespace,
@@ -90,9 +88,9 @@ func (m *Metrics) WebhookResult(result string) {
 	m.webhookRequests.WithLabelValues(result).Inc()
 }
 
-func (m *Metrics) EventIngested(eventType string, queued bool) {
+func (m *Metrics) EventIngested(eventType string, isQueued bool) {
 	outcome := "duplicate"
-	if queued {
+	if isQueued {
 		outcome = "queued"
 	}
 	m.eventsIngested.WithLabelValues(eventType, outcome).Inc()

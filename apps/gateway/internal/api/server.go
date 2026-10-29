@@ -18,7 +18,7 @@ type Ingestor interface {
 
 type Recorder interface {
 	WebhookResult(result string)
-	EventIngested(eventType string, queued bool)
+	EventIngested(eventType string, isQueued bool)
 	HTTPRequest(method, route string, status int, took time.Duration)
 }
 

@@ -30,7 +30,7 @@ type IngestResult struct {
 	Type        EventType
 	Subtype     string
 	MaskedPhone string
-	Queued      bool
+	IsQueued    bool
 }
 
 type Envelope struct {

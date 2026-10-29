@@ -1,6 +1,28 @@
 package crypto
 
-import "testing"
+import (
+	"encoding/hex"
+	"testing"
+)
+
+func TestSHA256Digest(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{name: "empty string", value: "", want: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+		{name: "abc", value: "abc", want: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			digest := SHA256Digest(tt.value)
+			if got := hex.EncodeToString(digest[:]); got != tt.want {
+				t.Fatalf("SHA256Digest(%q) = %s, want %s", tt.value, got, tt.want)
+			}
+		})
+	}
+}
 
 func TestVerifyHMACSHA256(t *testing.T) {
 	secret := []byte("secret")

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 const (
 	sqliteScheme    = "sqlite://"
 	minSecretLength = 16
+	minAPIKeyLength = 32
 )
 
 type Config struct {
@@ -31,6 +33,11 @@ type Config struct {
 	RetryBaseDelay       time.Duration `koanf:"retry_base_delay"`
 	DedupTTL             time.Duration `koanf:"dedup_ttl"`
 	FailedRetention      time.Duration `koanf:"failed_retention"`
+	MetaAPIVersion       string        `koanf:"meta_api_version"`
+	WAPhoneNumberID      string        `koanf:"wa_phone_number_id"`
+	WAAccessToken        string        `koanf:"wa_access_token"`
+	APIKeys              string        `koanf:"api_keys"`
+	IdempotencyTTL       time.Duration `koanf:"idempotency_ttl"`
 }
 
 func defaultValues() map[string]any {
@@ -44,6 +51,8 @@ func defaultValues() map[string]any {
 		"retry_base_delay":       "2s",
 		"dedup_ttl":              "48h",
 		"failed_retention":       "168h",
+		"meta_api_version":       "v24.0",
+		"idempotency_ttl":        "24h",
 	}
 }
 
@@ -78,6 +87,20 @@ func (c Config) SQLitePath() string {
 	return strings.TrimPrefix(c.DBURL, sqliteScheme)
 }
 
+func (c Config) SendingEnabled() bool {
+	return c.WAPhoneNumberID != "" && c.WAAccessToken != ""
+}
+
+func (c Config) APIKeyList() []string {
+	var keys []string
+	for _, key := range strings.Split(c.APIKeys, ",") {
+		if trimmed := strings.TrimSpace(key); trimmed != "" {
+			keys = append(keys, trimmed)
+		}
+	}
+	return keys
+}
+
 func (c Config) validate() error {
 	checks := []func() error{
 		c.validatePort,
@@ -86,6 +109,7 @@ func (c Config) validate() error {
 		c.validateStorage,
 		c.validateTransport,
 		c.validateRetry,
+		c.validateSending,
 	}
 	for _, check := range checks {
 		if err := check(); err != nil {
@@ -152,10 +176,51 @@ func (c Config) validateRetry() error {
 		"RETRY_BASE_DELAY": c.RetryBaseDelay,
 		"DEDUP_TTL":        c.DedupTTL,
 		"FAILED_RETENTION": c.FailedRetention,
+		"IDEMPOTENCY_TTL":  c.IdempotencyTTL,
 	} {
 		if value <= 0 {
 			return fmt.Errorf("%s must be greater than zero", name)
 		}
 	}
 	return nil
+}
+
+func (c Config) validateSending() error {
+	if (c.WAPhoneNumberID == "") != (c.WAAccessToken == "") {
+		return errors.New("WA_PHONE_NUMBER_ID and WA_ACCESS_TOKEN must be set together")
+	}
+	if !isAPIVersion(c.MetaAPIVersion) {
+		return fmt.Errorf("META_API_VERSION must look like v24.0, got %q", c.MetaAPIVersion)
+	}
+	if !c.SendingEnabled() {
+		return nil
+	}
+
+	keys := c.APIKeyList()
+	if len(keys) == 0 {
+		return errors.New("API_KEYS is required when sending is enabled")
+	}
+	for _, key := range keys {
+		if len(key) < minAPIKeyLength {
+			return fmt.Errorf("each API key must be at least %d characters", minAPIKeyLength)
+		}
+	}
+	return nil
+}
+
+func isAPIVersion(version string) bool {
+	numbers, found := strings.CutPrefix(version, "v")
+	if !found {
+		return false
+	}
+	major, minor, found := strings.Cut(numbers, ".")
+	if !found {
+		return false
+	}
+	for _, part := range []string{major, minor} {
+		if _, err := strconv.ParseUint(part, 10, 16); err != nil {
+			return false
+		}
+	}
+	return true
 }

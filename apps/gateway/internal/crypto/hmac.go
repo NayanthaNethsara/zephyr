@@ -6,6 +6,10 @@ import (
 	"encoding/hex"
 )
 
+func SHA256Digest(value string) [sha256.Size]byte {
+	return sha256.Sum256([]byte(value))
+}
+
 func SignHMACSHA256(secret []byte, parts ...[]byte) string {
 	return hex.EncodeToString(computeHMACSHA256(secret, parts))
 }

@@ -379,7 +379,7 @@ erDiagram
         bool active
     }
     DEDUP {
-        string wamid PK
+        string dedup_key PK
         datetime expires_at
     }
     IDEMPOTENCY {
@@ -448,7 +448,7 @@ Precedence: **env > YAML file (`CONFIG_FILE`) > defaults**.
 | `RATE_LIMIT_MPS`         | `80`                        | Per phone number                                 |
 | `DEDUP_TTL`              | `48h`                       |                                                  |
 | `IDEMPOTENCY_TTL`        | `24h`                       |                                                  |
-| `FAILED_RETENTION`       | `7d`                        |                                                  |
+| `FAILED_RETENTION`       | `168h`                      |                                                  |
 
 ---
 
@@ -523,7 +523,7 @@ zephyr/
 │       │   │   └── postgres/
 │       │   └── transport/
 │       │       ├── transport.go
-│       │       ├── http/
+│       │       ├── webhook/
 │       │       ├── nats/
 │       │       ├── redis/
 │       │       ├── rabbitmq/

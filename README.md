@@ -2,7 +2,7 @@
 
 Open-source, self-hosted gateway for Meta's official WhatsApp Cloud API, written in Go. Zephyr verifies, deduplicates, rate-limits, retries, and routes messages between WhatsApp and your own systems. It contains no bot or business logic.
 
-The architecture and implementation spec lives in [docs/wa-gateway-architecture.md](docs/wa-gateway-architecture.md).
+Documentation lives in [docs/](docs/README.md): [getting started](docs/getting-started.md), [architecture](docs/architecture.md), [user flows](docs/user-flows.md), [telemetry](docs/telemetry.md), [technical reference](docs/tech.md), and [limitations](docs/limitations.md). The target design for later releases is in [docs/wa-gateway-architecture.md](docs/wa-gateway-architecture.md).
 
 ## Requirements
 
@@ -75,6 +75,7 @@ make down
 - `META_VERIFY_TOKEN` and `WEBHOOK_SIGNING_SECRET` must be at least 16 random characters. Generate them with `openssl rand -hex 32`.
 - Verify the signature and reject old timestamps on the receiving side. See [docs/events.md](docs/events.md).
 - Message content is stored in the SQLite file only while an event is queued, and for `FAILED_RETENTION` if delivery fails. The file is created with mode `0600`. Keep the data volume private.
+- `/metrics`, `/healthz`, and `/readyz` are unauthenticated. Expose only `/webhook` publicly. See [docs/telemetry.md](docs/telemetry.md).
 - Keep tokens out of `WEBHOOK_URL` query strings where possible. Delivery errors are logged without the URL.
 
 ## License

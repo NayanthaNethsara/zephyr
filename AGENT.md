@@ -52,7 +52,7 @@ Folders and packages:
 
 - Lowercase, single word, no underscores, hyphens, or plurals: `outbox`, `transport`, `store`.
 - Named for what the package provides, not what it contains. Avoid stuttering: `store.Store`, not `store.StoreService`.
-- Implementation subpackages are named after the technology: `sqlite`, `postgres`, `nats`, `redis`.
+- Implementation subpackages are named after the technology: `sqlite`, `postgres`, `nats`, `redis`, `webhook`.
 - Command folders under `cmd/` are named after the binary.
 - Non-Go folders (`docs`, `migrations`, `api`) are lowercase single words.
 

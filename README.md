@@ -1,267 +1,87 @@
-# WhatsApp Gateway
+# WhatsApp gateway
 
-A NestJS-based gateway service that bridges WhatsApp Cloud API with AI workers through NATS JetStream message queues.
+NestJS/Fastify gateway for signed WhatsApp webhooks and queued outbound delivery. Node.js 22 or later is required.
 
-## Overview
+## Run locally
 
-This service handles bidirectional message flow between WhatsApp and AI processing systems:
-
-- Receives incoming WhatsApp messages via webhook
-- Validates Meta webhook signatures
-- Routes text messages to NATS JetStream incoming topic for AI processing
-- Consumes responses from NATS JetStream outgoing topic
-- Sends processed messages back to WhatsApp users
-
-## Architecture
-
-```
-WhatsApp Cloud API
-        |
-        v
-   [Webhook Endpoint]
-        |
-        v
-  [Signature Validation]
-        |
-        v
-   [Message Router]
-        |
-        +-- Text Message --> [NATS JetStream Incoming Topic] --> AI Worker
-        |
-        +-- Media Files --> [Download from WhatsApp] --> [Upload to Azure Blob] --> [NATS JetStream Incoming File Topic] --> AI Worker
-
-AI Worker --> [NATS JetStream Outgoing Topic] --> [NATS JetStream Consumer] --> WhatsApp Cloud API
-```
-
-## Technology Stack
-
-- NestJS 11.x
-- Fastify (HTTP adapter)
-- TypeScript (strict mode)
-- nats (NATS JetStream client)
-- WhatsApp Cloud API v21.0
-- Pino (logging)
-
-## Prerequisites
-
-- Node.js 18+ or 20+
-- pnpm package manager
-- NATS JetStream cluster (or local instance)
-- Meta Developer account
-- WhatsApp Business API access
-
-## Environment Variables
-
-Create a `.env` file in the root directory:
-
-```bash
-# Server Configuration
-PORT=3000
-
-# Meta Webhook Verification
-META_VERIFY_TOKEN=your_verify_token
-META_APP_SECRET=your_app_secret
-
-# WhatsApp Cloud API
-WHATSAPP_PHONE_NUMBER_ID=your_phone_number_id
-WHATSAPP_ACCESS_TOKEN=your_access_token
-WHATSAPP_BUSINESS_ACCOUNT_ID=your_business_account_id
-
-# NATS JetStream Configuration
-NATS_URL=nats://localhost:4222
-NATS_SUBJECT_INCOMING=whatsapp.incoming.messages
-NATS_SUBJECT_OUTGOING=whatsapp.outgoing.messages
-```
-
-## Installation
-
-```bash
-# Install dependencies
+```sh
 pnpm install
-
-# Build the project
-pnpm build
+cp .env.example .env
+docker compose up --detach redis   # or --profile nats
+pnpm dev
 ```
 
-## Running the Application
+Set real Meta and WhatsApp credentials in the gateway `.env`. Set a random `EITRI_GATEWAY_KEY` of at least 32 characters in `.env`; the Python backend and gateway must use the same value. `AGENT_BACKEND_URL` defaults to `http://127.0.0.1:8000`; `AGENT_WORKER_ENABLED=false` disables the incoming text worker if another integration consumes that topic. The gateway loads `.env` from the working directory; exported environment variables take precedence. It listens on port 8080. `GET /health` checks the process and returns `{ status, service }`. `GET /ready` checks the selected queue and returns 503 when unavailable. HTTP and asynchronous processing emit structured JSON logs with trace and correlation IDs; there is no metrics endpoint.
 
-```bash
-# Development mode with watch
-pnpm start:dev
+The webhook URL is `/whatsapp/webhooks`. Verification uses `META_VERIFY_TOKEN`; inbound POSTs require the original request bytes and a valid `sha256=` signature made with `META_APP_SECRET`. A successful webhook response means the supported messages were persisted to the queue. Queue failures return 503 so Meta can retry. Delivery-status webhooks are logged.
 
-# Production mode
-pnpm start:prod
+## Select the queue
 
-# Debug mode
-pnpm start:debug
-```
+Only the selected transport connects at startup. Change the provider and restart every producer/consumer using the queue.
 
-## API Endpoints
+| `QUEUE_PROVIDER`  | Connection                                                           | Implementation                                            |
+| ----------------- | -------------------------------------------------------------------- | --------------------------------------------------------- |
+| `redis` (default) | `REDIS_URL=redis://localhost:6379`                                   | Redis Streams, consumer groups, pending recovery          |
+| `postgres`        | `QUEUE_POSTGRES_URL=postgresql://user:password@localhost:5432/eitri` | SQL queue with atomic leases and `FOR UPDATE SKIP LOCKED` |
+| `nats`            | `NATS_URL=nats://localhost:4222`                                     | JetStream file storage and durable pull consumers         |
 
-### Webhook Verification (GET /webhook)
+PostgreSQL creates the dedicated `gateway_queue_messages` table and pending index on startup. The connection user needs permission to create them; the inventory schema is separate. URL-encode credentials in connection URLs. NATS defaults to the new `EITRI_WHATSAPP_EVENTS` stream; set `NATS_STREAM_NAME` to reuse an existing compatible stream. Legacy `NATS_SUBJECT_*` overrides still work; new `QUEUE_TOPIC_*` settings take precedence.
 
-Meta webhook verification endpoint.
+All transports preserve the same JSON message DTOs and logical topic names. Switching providers does not migrate existing messages. Drain or explicitly migrate queued work before switching. The gateway's `agent/` module consumes incoming text, calls the Python backend's `/channels/whatsapp/chat`, and publishes a stable outgoing reply before acknowledging the incoming message. The same integration works with all three transports. PostgreSQL in the backend persists WhatsApp identities and history regardless of the selected queue.
 
-**Query Parameters:**
+## Structure
 
-- `hub.mode`: Must be "subscribe"
-- `hub.verify_token`: Must match META_VERIFY_TOKEN
-- `hub.challenge`: Challenge string to echo back
-
-### Webhook Events (POST /webhook)
-
-Receives WhatsApp webhook events.
-
-**Headers:**
-
-- `x-hub-signature-256`: HMAC SHA-256 signature for verification
-
-**Body:**
-
-- WhatsApp webhook payload
-
-### Health Check (GET /health)
-
-Returns service health status.
-
-## Message Flow
-
-### Incoming Messages
-
-1. WhatsApp user sends a message
-2. Meta sends webhook POST request
-3. Service validates signature using META_APP_SECRET
-4. **Text messages:**
-   - Sent to NATS JetStream incoming topic for AI processing
-   - Message marked as read with typing indicator
-
-Non-text message types are currently ignored.
-
-### Outgoing Messages
-
-1. AI worker processes incoming message
-2. AI worker sends response to NATS JetStream outgoing topic
-3. NATS JetStream consumer reads the message
-4. Message is normalized and sent via WhatsApp API
-5. Successful messages are logged
-
-## Message Format
-
-### Incoming Topic (to AI Worker)
-
-```json
-{
-  "messageId": "wamid.xxx",
-  "from": "1234567890",
-  "to": "0987654321",
-  "timestamp": "1699876543",
-  "type": "text",
-  "content": {
-    "text": "Hello"
-  },
-  "metadata": {
-    "phoneNumberId": "123456789",
-    "displayPhoneNumber": "+1234567890"
-  }
-}
-```
-
-### Outgoing Topic (from AI Worker)
-
-Supports multiple formats:
-
-```json
-{
-  "to": "1234567890",
-  "type": "text",
-  "content": {
-    "text": "Response message"
-  }
-}
-```
-
-## Project Structure
-
-```
+```text
 src/
-├── app.module.ts      # Root module
-├── main.ts            # Application entry point
-├── common/            # Shared utilities
-│   ├── filters/       # Exception filters
-│   └── logger/        # Logging configuration
-├── config/            # Environment configuration and validation
-├── health/            # Health check feature module
-├── nats/              # NATS JetStream feature module
-│   └── dto/
-├── webhook/           # WhatsApp webhook feature module
-├── whatsapp/          # WhatsApp API feature module
-│   └── dto/
-└── types/             # Shared TypeScript types
+  config/                  Environment loading and validation
+  common/                  Logging, filters, permanent delivery error
+  modules/
+    agent/                 Incoming text worker and Python conversation adapter
+    webhook/               Signature verification and inbound normalization
+    whatsapp/              Cloud API client, wire mapping, typing indicator
+    queue/
+      contracts/           Transport-neutral DTOs and outgoing validation
+      incoming-producer.ts Inbound publication with stable deduplication key
+      outgoing-producer.ts Validated outgoing publication
+      outgoing-message-consumer.ts  WhatsApp delivery and telemetry
+      queue.service.ts     Shared lifecycle, retries, and dead-letter handling
+      queue.types.ts       Transport and subscription interfaces
+      queue-worker.ts      Polling loop and graceful shutdown
+      transports/          Factory plus Redis, PostgreSQL, and NATS adapters
+    health/                Process and selected-queue readiness
 ```
 
-## Development
+Webhook and WhatsApp code depend on the shared queue service, not individual broker clients. Adding another transport means implementing `QueueTransport` and registering it in the factory and settings. The gateway handles one delivery at a time per replica. Multiple replicas share the consumer group or durable consumer and compete for work. `QUEUE_CONSUMER_GROUP` must be the same across gateway replicas; it identifies the worker fleet on each topic.
 
-### Code Quality
+## Delivery behavior
 
-```bash
-# Lint code
+`QUEUE_LEASE_MS` defaults to 60000. Workers renew active leases and recover abandoned deliveries after the lease expires. Successful delivery is acknowledged; transient failures stay queued for retry. `QUEUE_MAX_ATTEMPTS` defaults to 5. Invalid payloads and permanent WhatsApp HTTP failures go directly to `<topic>.dead`; exhausted retries go there too. The source is acknowledged only after the dead-letter publication succeeds. WhatsApp network failures, timeouts, HTTP 408, 429, and server errors are retryable. The API client has a bounded request timeout and leaves retries to the queue worker.
+
+Incoming publications use the business number and WhatsApp message ID for deduplication. Outgoing publishers should use a stable `messageId` when retrying publication. `QUEUE_DEDUP_SECONDS` defaults to 86400: Redis keeps dedup keys for that duration, PostgreSQL retains completed rows for that duration after completion, and NATS uses it as the stream duplicate window. PostgreSQL cleanup runs in bounded batches. Redis removes completed entries; each topic is a work queue with one logical consumer group, not a broadcast log. Pending work and dead letters are retained until handled or explicitly removed. Monitor backlog, storage, and dead letters; do not use an eviction policy that silently discards queue data.
+
+Delivery is at least once. A process failure after Meta accepts a send and before queue acknowledgment can cause a duplicate WhatsApp send; Meta's send API is outside the queue transaction. Retries and multiple replicas can reorder deliveries, so strict webhook arrival order is not guaranteed. The backend leases each conversation to prevent overlapping graph turns and returns 409 for busy conversations; the queue retries those deliveries. Completed turns are cached by WhatsApp message ID, so retries reuse the saved reply. Typing indicators are best effort and local to a gateway replica; outgoing delivery does not depend on them.
+
+Unsupported incoming formats generate a queued text fallback. Media forwarding remains opt-in through `WHATSAPP_MEDIA_SUPPORTED`; bytes are fetched by the downstream worker, not the gateway. `WHATSAPP_API_VERSION` defaults to the existing `v23.0`; the version is configurable. `WHATSAPP_REQUEST_TIMEOUT_MS` defaults to 15000.
+
+## Docker
+
+Copy and fill `.env`, then run:
+
+```sh
+docker compose up --build --detach --wait
+```
+
+Redis uses a persistent volume, AOF, and `noeviction`. For NATS, set `QUEUE_PROVIDER=nats` in `.env` and run with `--profile nats` including the `nats` service. For PostgreSQL, point `QUEUE_POSTGRES_URL` at your own database. Compose overrides the Redis and NATS URLs to their service hostnames. The gateway image runs as a non-root user. Queue data lives in the queue services' persistent volumes. The Compose file does not include the Python agent backend; set `AGENT_BACKEND_URL` to wherever it runs, or `AGENT_WORKER_ENABLED=false`.
+
+## Checks and contracts
+
+```sh
+pnpm typecheck
 pnpm lint
-
-# Format code
-pnpm format
-
-# Type check
 pnpm build
 ```
 
-### Testing
-
-```bash
-# Unit tests
-pnpm test
-
-# E2E tests
-pnpm test:e2e
-
-# Test coverage
-pnpm test:cov
-
-# Watch mode
-pnpm test:watch
-```
-
-## NATS JetStream Setup
-
-Ensure you have a NATS JetStream broker running and accessible via `NATS_URL`. The service will automatically connect to the broker.
-
-The topics specified in `.env` should exist or be auto-created by the broker (depending on broker configuration).
-
-## WhatsApp Setup
-
-### Webhook Configuration
-
-1. Go to Meta Developer Console
-2. Navigate to WhatsApp > Configuration
-3. Set Callback URL: `https://your-domain.com/webhook`
-4. Set Verify Token: Same as META_VERIFY_TOKEN
-5. Subscribe to webhook fields: `messages`
-
-### Required Permissions
-
-- `whatsapp_business_messaging`
-- `whatsapp_business_management`
-
-## Logging
-
-The service uses Pino for structured logging with the following levels:
-
-- `error`: Error messages and stack traces
-- `warn`: Warning messages
-- `log`: General information
-- `debug`: Detailed debugging information
-
-Logs are output in JSON format for production environments.
-
-## License
-
-UNLICENSED
+- [Incoming message contract](docs/incoming-queues.md)
+- [Outgoing message contract](docs/outgoing-queue.md)
+- [Meta webhook shapes](docs/whatsapp-webhook.md)
+- [Queue implementation references](docs/queue-transports.md)

@@ -62,7 +62,7 @@ sequenceDiagram
     Note over Z: log "event delivered"
 ```
 
-Your service receives a `message.inbound` event containing the sender, message ID, timestamp, type, and the original Meta message under `raw`. Reply logic belongs in your service. Zephyr does not send replies in this release.
+Your service receives a `message.inbound` event containing the sender, message ID, timestamp, type, and the original Meta message under `raw`. Reply logic belongs in your service, which can answer through the sending API (flow 13).
 
 ## Flow 4: A delivery status update
 
@@ -176,3 +176,94 @@ Take the `wamid` from your service or from Meta, then follow the `event_id`:
 3. Use `request_id` to find the matching `request` log line with status and duration. The same ID is returned to the caller in the `X-Request-Id` response header.
 
 See [telemetry.md](telemetry.md) for the full field list and metrics.
+
+## Flow 13: Your service sends a message
+
+```mermaid
+sequenceDiagram
+    participant U as Your service
+    participant Z as Zephyr
+    participant M as Meta
+    participant P as Customer
+
+    U->>Z: POST /v1/messages (API key, correlation id)
+    Z->>Z: Check key, validate message
+    Z->>M: Graph API send
+    M-->>Z: wamid
+    Z-->>U: 200 {"wamid": "..."}
+    Note over Z: log "message sent" with wamid, type, masked number
+    M->>P: Message delivered to the phone
+    M->>Z: POST /webhook status: sent, delivered, read
+    Z->>U: message.status events, signed
+```
+
+The `200` means Meta accepted the message, not that the phone received it. Delivery progress comes back through the normal inbound path as `message.status` events carrying the same `wamid`, so your service can match them to the send. A common pattern is a reply to an inbound message: take the sender from the `message.inbound` event's `data.from` and send within 24 hours.
+
+## Flow 14: A send fails
+
+```mermaid
+flowchart TD
+    A["POST /v1/messages"] --> B{"Valid API key?"}
+    B -- "no" --> R401["401 unauthorized"]
+    B -- "yes" --> C{"Body valid?"}
+    C -- "no" --> R400["400 invalid_request, fix and resend"]
+    C -- "yes" --> D["Zephyr calls Meta"]
+    D --> E{"Meta answer"}
+    E -- "accepted" --> R200["200 with wamid"]
+    E -- "24-hour window closed" --> R422a["422 window_closed, send a template instead"]
+    E -- "recipient problem" --> R422b["422 recipient_undeliverable or recipient_not_allowed"]
+    E -- "template problem" --> R422c["422 template_error"]
+    E -- "throttled" --> R429["429 rate_limited, retryable"]
+    E -- "token or number problem" --> R502a["502 upstream_auth_failed or sender_misconfigured, fix configuration"]
+    E -- "Meta down" --> R502b["502 upstream_unavailable, retryable"]
+    E -- "no answer in 15 s" --> R504["504 upstream_timeout, retryable but may have been sent"]
+```
+
+Retry only when `retryable` is true. With an `Idempotency-Key` the retry is safe (flow 16). Without one, be careful with `upstream_timeout`: Meta may have accepted the message even though no answer arrived, so a blind retry can send it twice. Every failure is logged with the Meta error code and its trace ID, which Meta support can use. See [api.md](api.md) for the full table.
+
+## Flow 15: Reaching a customer after 24 hours
+
+WhatsApp lets you send free-form messages only within 24 hours of the customer's last message. After that, Meta rejects the send and Zephyr returns `422 window_closed`. Your service responds by sending an approved template message instead:
+
+```mermaid
+flowchart LR
+    A["Send free-form text"] --> B{"window_closed?"}
+    B -- "no" --> C["Delivered"]
+    B -- "yes" --> D["Send approved template"]
+    D --> E["Customer replies"]
+    E --> F["Window reopens for 24 hours"]
+```
+
+Zephyr does not track the window itself, so the first rejected send is how your service learns it is closed. Your service can also track the time of the last `message.inbound` event per customer to avoid the failed call.
+
+## Flow 16: Retrying a send safely
+
+Your service sends an order confirmation and the connection drops before the response arrives. It cannot tell whether the customer was messaged.
+
+```mermaid
+sequenceDiagram
+    participant U as Your service
+    participant Z as Zephyr
+    participant M as Meta
+
+    U->>Z: POST /v1/messages, Idempotency-Key: order-1-confirm
+    Z->>Z: Claim key order-1-confirm
+    Z->>M: Send
+    M-->>Z: wamid
+    Z->>Z: Record wamid against the key
+    Z--xU: response lost
+    U->>Z: Retry, same Idempotency-Key and same message
+    Z-->>U: 200 same wamid, Idempotent-Replayed: true
+    Note over Z,M: The retry never reached Meta, the customer got one message
+```
+
+What your service sees on a retry depends on how the first attempt ended:
+
+| First attempt                                  | Retry with the same key                                              |
+| ---------------------------------------------- | -------------------------------------------------------------------- |
+| Succeeded, response lost                       | `200` with the original `wamid` and `Idempotent-Replayed: true`      |
+| Still running (slow Meta call)                 | `409 request_in_progress`. Wait a moment and retry again             |
+| Failed with a Meta error                       | The key was released, so the retry sends for real and gets a fresh answer |
+| Never reached Zephyr                           | Sends normally, since the key was never claimed                      |
+
+Use one key per logical message and a different key for each new message. Reusing a key for a different message returns `422 idempotency_key_reused` so a bug on your side cannot silently drop a message.

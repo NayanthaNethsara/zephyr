@@ -4,7 +4,8 @@ Zephyr gives you two views of what is happening: structured logs to follow a sin
 
 ## What is never recorded
 
-- Message text, media, or any field from the Meta message body
+- Message text, media, or any field from the Meta message body, including the body of messages you send
+- `WA_ACCESS_TOKEN` and your API keys. A rejected key is logged without its value
 - `META_APP_SECRET`, `WEBHOOK_SIGNING_SECRET`, `META_VERIFY_TOKEN`
 - Full phone numbers. They appear masked as `9477*****00` (first four and last two digits)
 - The `WEBHOOK_URL`. Delivery errors are logged without it
@@ -29,6 +30,12 @@ Logs are JSON, one object per line, written to stdout. Set the level with `LOG_L
 | `lag_ms`       | `event delivered`                   | Time from acceptance to successful delivery                    |
 | `retry_in_ms`  | `event delivery failed`             | Delay before the next attempt                                  |
 | `error`        | Failure lines                       | Reason, for example `webhook responded with status 500`        |
+| `to`           | Send lines                          | Masked recipient number                                        |
+| `correlation_id` | Send lines                        | Your reference from the request body or `X-Correlation-Id`     |
+| `idempotent`   | Send lines                          | `true` when the request carried an `Idempotency-Key`           |
+| `code`         | `message send failed`               | Zephyr error code such as `window_closed`                      |
+| `meta_code`    | `message send failed`               | Meta's numeric error code, `0` when the error did not come from Meta |
+| `trace_id`     | `message send failed`               | Meta's `fbtrace_id`. Quote it to Meta support                   |
 
 ### Message lifecycle log lines
 
@@ -45,6 +52,12 @@ Logs are JSON, one object per line, written to stdout. Set the level with `LOG_L
 | `event delivered`                       | info  | Your service accepted the event                              |
 | `event delivery failed, will retry`     | warn  | Attempt failed, next retry scheduled                         |
 | `event delivery exhausted`              | error | Attempts used up. Event marked failed                        |
+| `api key rejected`                      | warn  | A `/v1` call had a missing or wrong API key                  |
+| `message request rejected`              | warn  | A send request was malformed or too large                    |
+| `message sent`                          | info  | Meta accepted a message. Has `wamid`, type, masked number, duration |
+| `message send replayed`                 | info  | A repeated `Idempotency-Key` returned the earlier result without sending |
+| `idempotency key could not be recorded, a retry may send the message again` | error | The message was sent but the key could not be saved. Investigate the database |
+| `message send failed`                   | warn or error | A send failed. Error level for gateway or Meta side faults (5xx), warn for rejections |
 
 ### Example: one message from arrival to delivery
 
@@ -90,6 +103,8 @@ Prometheus text format at `GET /metrics`. Go runtime and process metrics are inc
 | `zephyr_outbox_entries`                        | gauge     | `state`               | Events waiting (`pending`) and given up (`failed`)        |
 | `zephyr_outbox_oldest_pending_age_seconds`     | gauge     | none                  | Age of the oldest waiting event, `0` when empty           |
 | `zephyr_outbox_stats_error`                    | gauge     | none                  | `1` if the queue could not be read during the scrape      |
+| `zephyr_send_requests_total`                   | counter   | `type`, `result`      | Send requests by message type and result (`sent`, `replayed`, or an error code) |
+| `zephyr_send_duration_seconds`                 | histogram | `type`                | Time to handle a send, including the call to Meta         |
 | `zephyr_http_requests_total`                   | counter   | `method`, `route`, `status` | Request counts                                      |
 | `zephyr_http_request_duration_seconds`         | histogram | `method`, `route`     | Request latency                                           |
 
@@ -110,6 +125,16 @@ histogram_quantile(0.95, sum(rate(zephyr_delivery_lag_seconds_bucket[5m])) by (l
 
 # Rejected webhooks (possible misconfigured secret or probing)
 sum(rate(zephyr_webhook_requests_total{result="invalid_signature"}[5m]))
+
+# Share of sends that succeeded
+sum(rate(zephyr_send_requests_total{result="sent"}[5m]))
+  / sum(rate(zephyr_send_requests_total[5m]))
+
+# Retries absorbed by idempotency keys
+sum(rate(zephyr_send_requests_total{result="replayed"}[5m]))
+
+# Sends failing for a given reason
+sum by (result) (rate(zephyr_send_requests_total{result!="sent"}[5m]))
 ```
 
 ### Suggested alerts
@@ -121,6 +146,8 @@ sum(rate(zephyr_webhook_requests_total{result="invalid_signature"}[5m]))
 | Persistence errors         | `increase(zephyr_webhook_requests_total{result="persist_error"}[5m]) > 0` | Disk or database trouble, Meta is retrying       |
 | Signature rejections       | `rate(zephyr_webhook_requests_total{result="invalid_signature"}[5m]) > 0` | Wrong app secret, or someone is probing the endpoint |
 | Not scraping               | `zephyr_outbox_stats_error == 1`                                  | The store cannot be read                                 |
+| Token problem              | `increase(zephyr_send_requests_total{result="upstream_auth_failed"}[10m]) > 0` | The Meta access token expired or lost permission |
+| Sends failing              | `sum(rate(zephyr_send_requests_total{result=~"upstream_.*|rate_limited"}[5m])) > 0` | Meta is rejecting, throttling, or unreachable |
 
 ### Scrape configuration
 

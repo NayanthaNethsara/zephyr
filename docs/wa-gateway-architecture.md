@@ -309,6 +309,7 @@ HTTP delivery headers:
 - `type` mirrors Meta types: `text`, `image`, `video`, `audio`, `document`, `sticker`, `location`, `contacts`, `interactive`, `template`, `reaction`.
 - The body for each type follows Meta's shape; the gateway validates required fields and passes it through.
 - `phone_number_id` optional when only one number is configured.
+- Implementation note: the REST API takes the idempotency key from the `Idempotency-Key` header only, claims it before sending (so concurrent duplicates cannot both send), rejects the same key with a different message, and stores only successful sends. See [api.md](api.md) and [architecture.md](architecture.md).
 
 ### 6.3 Error object
 

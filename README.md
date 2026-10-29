@@ -1,8 +1,8 @@
 # Zephyr
 
-Open-source, self-hosted gateway for Meta's official WhatsApp Cloud API, written in Go. Zephyr verifies, deduplicates, rate-limits, retries, and routes messages between WhatsApp and your own systems. It contains no bot or business logic.
+Open-source, self-hosted gateway for Meta's official WhatsApp Cloud API, written in Go. Zephyr verifies, deduplicates, retries, and routes messages between WhatsApp and your own systems. It contains no bot or business logic.
 
-Documentation lives in [docs/](docs/README.md): [getting started](docs/getting-started.md), [architecture](docs/architecture.md), [user flows](docs/user-flows.md), [telemetry](docs/telemetry.md), [technical reference](docs/tech.md), and [limitations](docs/limitations.md). The target design for later releases is in [docs/wa-gateway-architecture.md](docs/wa-gateway-architecture.md).
+Documentation lives in [docs/](docs/README.md): [getting started](docs/getting-started.md), [sending API](docs/api.md), [architecture](docs/architecture.md), [user flows](docs/user-flows.md), [telemetry](docs/telemetry.md), [technical reference](docs/tech.md), and [limitations](docs/limitations.md). The target design for later releases is in [docs/wa-gateway-architecture.md](docs/wa-gateway-architecture.md).
 
 ## Requirements
 
@@ -38,6 +38,7 @@ curl localhost:8080/healthz
 2. Set `META_APP_SECRET` to the app secret so Zephyr can verify `X-Hub-Signature-256`.
 3. Subscribe the app to the `messages` webhook field.
 4. Set `WEBHOOK_URL` to your service. Zephyr forwards each inbound message and status update there as a signed POST. See [docs/events.md](docs/events.md).
+5. To send messages, set `WA_PHONE_NUMBER_ID`, `WA_ACCESS_TOKEN`, and `API_KEYS`, then call `POST /v1/messages`. See [docs/api.md](docs/api.md).
 
 Run `make help` for all targets.
 
@@ -66,6 +67,11 @@ make down
 | `RETRY_BASE_DELAY`       | `2s`                        | Exponential backoff base, with jitter              |
 | `DEDUP_TTL`              | `48h`                       | How long seen message IDs are remembered           |
 | `FAILED_RETENTION`       | `168h`                      | How long failed events are kept                    |
+| `META_API_VERSION`       | `v24.0`                     | Graph API version used for sending                 |
+| `WA_PHONE_NUMBER_ID`     | empty                       | Your WhatsApp phone number ID. Enables sending     |
+| `WA_ACCESS_TOKEN`        | empty                       | Meta access token. Set together with the number ID |
+| `API_KEYS`               | empty                       | Keys for `/v1`. Required when sending is enabled   |
+| `IDEMPOTENCY_TTL`        | `24h`                       | How long a successful send is remembered per key   |
 
 ## Security notes
 
@@ -73,7 +79,7 @@ make down
 - `META_VERIFY_TOKEN` and `WEBHOOK_SIGNING_SECRET` must be at least 16 random characters. Generate them with `openssl rand -hex 32`.
 - Verify the signature and reject old timestamps on the receiving side. See [docs/events.md](docs/events.md).
 - Message content is stored in the SQLite file only while an event is queued, and for `FAILED_RETENTION` if delivery fails. The file is created with mode `0600`. Keep the data volume private.
-- `/metrics`, `/healthz`, and `/readyz` are unauthenticated. Expose only `/webhook` publicly. See [docs/telemetry.md](docs/telemetry.md).
+- `/metrics`, `/healthz`, and `/readyz` are unauthenticated. Expose only `/webhook` publicly, plus `/v1/messages` if your service calls Zephyr from elsewhere. See [docs/telemetry.md](docs/telemetry.md).
 - Keep tokens out of `WEBHOOK_URL` query strings where possible. Delivery errors are logged without the URL.
 
 ## License

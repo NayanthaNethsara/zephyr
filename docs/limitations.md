@@ -6,16 +6,31 @@ This page lists what Zephyr 0.1 does not do and the behaviors to plan around. It
 
 | Gap                                   | Impact                                                                        | Status                  |
 | ------------------------------------- | ----------------------------------------------------------------------------- | ----------------------- |
-| No sending of messages                | Zephyr is receive-only. Replies must go to Meta by your own means             | Planned, next release   |
-| No API key authentication             | There is no authenticated API yet, so nothing to protect. `/metrics` is open  | Planned with the send API |
 | No list or replay API for failed events | Failed events need manual SQL to inspect or retry (see user-flows.md, flow 10) | Planned               |
 | Only the `http` transport             | No NATS, Redis, RabbitMQ, or Kafka delivery                                    | Planned                 |
 | SQLite only                           | No PostgreSQL support                                                          | Planned                 |
-| One WhatsApp number per deployment    | Webhooks for other numbers are forwarded but there is no per-number config     | Planned                 |
-| No 24-hour session tracking           | Not needed for receive-only                                                    | Planned with sending    |
-| No rate limiting                      | Neither inbound requests nor outbound delivery are throttled                   | Planned                 |
-| No media handling                     | Media messages arrive with Meta's media ID only. Zephyr does not download them | Not planned for 0.x     |
+| One WhatsApp number per deployment    | Webhooks for other numbers are forwarded but sending uses the one configured number | Planned            |
+| No 24-hour session tracking           | Free-form sends outside the window are rejected by Meta, not pre-checked       | Planned                 |
+| No rate limiting                      | Neither inbound requests nor sends are throttled by Zephyr. Meta throttles sends (`rate_limited`) | Planned |
+| No media upload or download           | You can send media by Meta media ID or public link. Zephyr does not upload files to Meta or fetch inbound media | Planned for uploads |
 | No dashboard                          | Everything is logs and metrics                                                 | Later                   |
+
+## Sending
+
+| Behavior                                    | Detail and workaround                                                                                         |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Sends are synchronous                       | The call blocks until Meta answers, up to 15 seconds. Set a client timeout above that                          |
+| Zephyr does not retry or queue sends        | A failure is returned to you with `retryable`. Your service owns retries                                       |
+| A timeout can hide a successful send        | On `upstream_timeout` or a dropped connection the message may have been accepted. Send an `Idempotency-Key` so a retry is safe, and treat the `message.status` events as the source of truth |
+| Idempotency is opt-in                       | Without the `Idempotency-Key` header every call sends, and blind retries can duplicate                         |
+| Idempotency has two narrow gaps             | A crash between Meta accepting a message and Zephyr recording it, and a database failure while recording. Both can allow one duplicate on retry. The second is logged as an error |
+| Only successful sends are remembered        | A failed send releases its key so the retry runs again. A key is kept for `IDEMPOTENCY_TTL` (24 hours by default) |
+| Individual recipients only                  | Group messages, replies with `context`, read receipts, and typing indicators are not exposed                   |
+| The 24-hour window is not pre-checked       | Meta rejects the send and Zephyr returns `window_closed`. Use a template to reach customers outside the window |
+| Only required fields are validated          | Everything else is passed to Meta as is, so new Meta features work, and Meta's rejection comes back as a code  |
+| Error codes follow Meta's published table   | Code `131030` (recipient not allowed on a test number) is not in that table but is handled. Unlisted codes fall back to the HTTP status |
+| API keys are static                         | They live in `API_KEYS`. Rotating or revoking a key means a restart. There are no scopes                       |
+| Sent messages are not stored                | Zephyr logs metadata only (message ID, type, masked number). Delivery results arrive as `message.status` events |
 
 ## Delivery behavior
 
@@ -54,7 +69,8 @@ This page lists what Zephyr 0.1 does not do and the behaviors to plan around. It
 
 | Item                                   | Detail                                                                                            |
 | -------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `/metrics`, `/healthz`, `/readyz` are unauthenticated | Expose only `/webhook` publicly                                                            |
+| `/metrics`, `/healthz`, `/readyz` are unauthenticated | Expose only `/webhook` and, if you want remote sending, `/v1/messages` publicly            |
+| `WA_ACCESS_TOKEN` grants sending rights | It lives in the environment and is sent only to Meta over HTTPS. Treat the `.env` file as a secret and use a system user token with the minimum permissions |
 | Message content is stored temporarily  | Plaintext in the SQLite file while queued, and for `FAILED_RETENTION` if delivery fails. Protect the volume and its backups |
 | Secrets live in environment variables  | Use your platform's secret store. There is no secret rotation support                             |
 | Inbound replay window                  | Meta does not send a timestamp. A captured, validly signed request could be replayed after `DEDUP_TTL` expires |

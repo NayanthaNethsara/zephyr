@@ -5,6 +5,7 @@
 | Layer          | Choice                                   | Notes                                                    |
 | -------------- | ---------------------------------------- | -------------------------------------------------------- |
 | Language       | Go 1.26                                  | Version is set by a dependency requirement in `go.mod`   |
+| Meta client    | `net/http`                               | Graph API `POST /{version}/{phone_number_id}/messages`    |
 | HTTP framework | Gin                                      | Release mode, custom logging middleware                  |
 | Storage        | SQLite via `modernc.org/sqlite`          | Pure Go, no CGO, WAL mode                                |
 | Migrations     | `pressly/goose` with embedded SQL        | Applied at startup                                       |
@@ -48,6 +49,13 @@ Values come from environment variables. A `.env` file is loaded by `make` and by
 | `RETRY_BASE_DELAY`       | `2s`                        | Greater than zero. Go duration syntax                     |
 | `DEDUP_TTL`              | `48h`                       | Greater than zero                                         |
 | `FAILED_RETENTION`       | `168h`                      | Greater than zero. Go durations have no `d` unit          |
+| `META_API_VERSION`       | `v24.0`                     | Graph API version, in the form `v24.0`                    |
+| `WA_PHONE_NUMBER_ID`     | empty                       | Your WhatsApp phone number ID. Enables sending            |
+| `WA_ACCESS_TOKEN`        | empty                       | Meta access token. Must be set together with the number ID |
+| `API_KEYS`               | empty                       | Comma-separated keys for `/v1`. Required when sending is on, each at least 32 characters |
+| `IDEMPOTENCY_TTL`        | `24h`                       | Greater than zero. How long a successful send is remembered per `Idempotency-Key` |
+
+Sending is on only when `WA_PHONE_NUMBER_ID` and `WA_ACCESS_TOKEN` are both set. Setting just one is a startup error, and so is enabling sending without `API_KEYS`. These replace the `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_ACCESS_TOKEN`, and `WHATSAPP_API_VERSION` names used by the old NestJS gateway. Zephyr ignores the old names.
 
 `DB_URL` examples: `sqlite:///data/gateway.db` is the absolute path `/data/gateway.db`, and `sqlite://./data/gateway.db` is relative to the working directory.
 
@@ -60,8 +68,9 @@ Values come from environment variables. A `.env` file is loaded by `make` and by
 | GET    | `/healthz` | none                          | Process is running                | `200 {"status":"ok"}`                         |
 | GET    | `/readyz`  | none                          | Database is reachable             | `200 {"status":"ready"}`, `503`               |
 | GET    | `/metrics` | none                          | Prometheus metrics                | `200`                                         |
+| POST   | `/v1/messages` | `Authorization: Bearer <api key>` | Send a WhatsApp message (only when sending is enabled) | `200`, `400`, `401`, `413`, `422`, `429`, `500`, `502`, `504` |
 
-Every response carries an `X-Request-Id` header. Do not expose `/metrics`, `/healthz`, or `/readyz` publicly. Route only `/webhook` through your reverse proxy.
+The sending endpoint is documented in [api.md](api.md). Every response carries an `X-Request-Id` header. Do not expose `/metrics`, `/healthz`, or `/readyz` publicly. Route only `/webhook` through your reverse proxy.
 
 ## Outgoing requests to your service
 
@@ -87,7 +96,7 @@ Topics are the outbox routing names and are prepared for future broker transport
 
 ## Database
 
-Schema after all migrations (`apps/gateway/migrations/`). Migration `00001` created the tables as `dedup` and `outbox`, and `00002` renamed them to plural names without touching their rows:
+Schema after all migrations (`apps/gateway/migrations/`). Migration `00001` created the tables as `dedup` and `outbox`, `00002` renamed them to plural names without touching their rows, and `00003` added `idempotency_keys`:
 
 ```sql
 CREATE TABLE dedup_keys (
@@ -109,7 +118,19 @@ CREATE TABLE outbox_entries (
 );
 ```
 
-Timestamps are Unix milliseconds. `state` is `pending` or `failed`. Connection settings: WAL journal, `busy_timeout` 5000 ms, `synchronous=NORMAL`, one open connection. The database file is created with mode `0600`.
+```sql
+CREATE TABLE idempotency_keys (
+    idempotency_key  TEXT PRIMARY KEY,
+    fingerprint      TEXT NOT NULL,
+    state            TEXT NOT NULL,
+    message_id       TEXT NOT NULL DEFAULT '',
+    lease_expires_at INTEGER NOT NULL,
+    expires_at       INTEGER NOT NULL,
+    created_at       INTEGER NOT NULL
+);
+```
+
+Timestamps are Unix milliseconds. In `outbox_entries`, `state` is `pending` or `failed`. In `idempotency_keys`, `state` is `in_progress` or `completed`. Connection settings: WAL journal, `busy_timeout` 5000 ms, `synchronous=NORMAL`, one open connection. The database file is created with mode `0600`.
 
 Migrations are applied automatically at startup. To add one, create the next numbered file in `apps/gateway/migrations/` using the `NNNNN_description.sql` format with `-- +goose Up` and `-- +goose Down` sections.
 
@@ -122,10 +143,14 @@ Migrations are applied automatically at startup. To add one, create the next num
 | Worker batch size             | 50 entries                                      |
 | Delivery timeout per attempt  | 10 s                                            |
 | Retry delay                   | `RETRY_BASE_DELAY` doubled per attempt, max 10 min, jitter between 50% and 100% |
-| Janitor interval              | 1 min                                           |
+| Janitor interval              | 1 min, also removes expired idempotency keys    |
 | Server read header timeout    | 10 s                                            |
 | Server read and write timeout | 30 s each                                       |
 | Server idle timeout           | 2 min                                           |
+| Send request body limit       | 1 MiB                                           |
+| Call to Meta (send)           | 15 s                                            |
+| Idempotency in-flight lease   | 60 s                                            |
+| Idempotency key length        | 1 to 255 printable ASCII characters, no spaces  |
 | Graceful shutdown timeout     | 30 s                                            |
 | Readiness check timeout       | follows the request                             |
 | Metrics store read timeout    | 2 s                                             |
@@ -165,5 +190,5 @@ There is no container healthcheck because the image has no shell. Use `/healthz`
 | ID           | Format                         | Created by | Purpose                                      |
 | ------------ | ------------------------------ | ---------- | -------------------------------------------- |
 | Event ID     | `evt_` plus 32 hex characters  | core       | Idempotency key for receivers, trace key     |
-| Request ID   | `req_` plus 16 hex characters  | api        | Ties a webhook request to its log lines      |
+| Request ID   | `req_` plus 16 hex characters  | api        | Ties a request to its log lines              |
 | `wamid`      | Meta's message ID              | Meta       | Dedup key and message reference              |

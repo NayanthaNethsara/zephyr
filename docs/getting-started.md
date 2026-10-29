@@ -1,6 +1,6 @@
 # Getting started
 
-This guide takes you from nothing to a WhatsApp message arriving at your own HTTP endpoint through Zephyr. It covers release 0.1: receiving messages and delivery statuses. Sending messages is not available yet, so you do not need a WhatsApp access token.
+This guide takes you from nothing to a WhatsApp message arriving at your own HTTP endpoint through Zephyr, and then to replying through the sending API. Receiving needs no WhatsApp access token. Sending (step 8) does.
 
 ## How it fits together
 
@@ -131,6 +131,38 @@ Send a WhatsApp message from your phone to the business number (for a test numbe
 3. Your receiver printing a `message.inbound` event
 
 Delivery status updates (`sent`, `delivered`, `read`, `failed`) for messages sent from the business number arrive as `message.status` events.
+
+## 8. Send a message
+
+Sending is optional. Turn it on by adding three values to `.env` and restarting Zephyr.
+
+| Variable             | Where it comes from                                                                             |
+| -------------------- | ----------------------------------------------------------------------------------------------- |
+| `WA_PHONE_NUMBER_ID` | Meta app dashboard, WhatsApp, API setup, the phone number ID (not the phone number itself)      |
+| `WA_ACCESS_TOKEN`    | A Meta access token with the `whatsapp_business_messaging` permission. Prefer a system user token because temporary tokens expire within hours |
+| `API_KEYS`           | One or more keys you generate with `openssl rand -hex 32`, comma-separated                      |
+
+These replace the `WHATSAPP_PHONE_NUMBER_ID` and `WHATSAPP_ACCESS_TOKEN` names from the old NestJS gateway. `META_API_VERSION` defaults to `v24.0`.
+
+Then send a reply to a number that messaged you in the last 24 hours:
+
+```sh
+curl -i -X POST http://localhost:8080/v1/messages \
+  -H "Authorization: Bearer $ZEPHYR_API_KEY" \
+  -d '{"to":"94770000000","type":"text","text":{"body":"Hello from Zephyr"}}'
+```
+
+Add `-H "Idempotency-Key: some-unique-id"` when your service may retry, so a repeat never sends twice. A successful call returns `{"wamid":"..."}`. The message then produces `message.status` events (`sent`, `delivered`, `read`) at your `WEBHOOK_URL`. Every message type and error code is described in [api.md](api.md).
+
+Common first errors:
+
+| Response                         | Cause and fix                                                                                          |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `401 unauthorized`               | The key is missing or not in `API_KEYS`                                                                |
+| `404` on `/v1/messages`          | Sending is off. Set all three variables and restart                                                    |
+| `502 upstream_auth_failed`       | `WA_ACCESS_TOKEN` is expired or invalid. Create a new one                                              |
+| `422 window_closed`              | The customer has not messaged in 24 hours. Send an approved template instead                           |
+| `422 recipient_not_allowed`      | You are using a test number. Add the recipient under the allowed list in the Meta dashboard            |
 
 ## Day-to-day commands
 

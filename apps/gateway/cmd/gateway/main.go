@@ -11,8 +11,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/NayanthaNethsara/whatsapp-gateway/internal/api"
-	"github.com/NayanthaNethsara/whatsapp-gateway/internal/config"
+	"github.com/NayanthaNethsara/zephyr/apps/gateway/internal/api"
+	"github.com/NayanthaNethsara/zephyr/apps/gateway/internal/config"
 )
 
 const shutdownTimeout = 30 * time.Second

@@ -1,4 +1,4 @@
-module github.com/NayanthaNethsara/whatsapp-gateway
+module github.com/NayanthaNethsara/zephyr/apps/gateway
 
 go 1.25.0
 

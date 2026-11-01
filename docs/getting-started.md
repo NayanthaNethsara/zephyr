@@ -154,6 +154,8 @@ curl -i -X POST http://localhost:8080/v1/messages \
 
 Add `-H "Idempotency-Key: some-unique-id"` when your service may retry, so a repeat never sends twice. A successful call returns `{"wamid":"..."}`. The message then produces `message.status` events (`sent`, `delivered`, `read`) at your `WEBHOOK_URL`. Every message type and error code is described in [api.md](api.md).
 
+To send a file, upload it first and send the returned ID. Receiving a customer's photo works in reverse: read the media ID from the event and download it from Zephyr. Neither needs any storage on Zephyr's side. See the media section of [api.md](api.md).
+
 Common first errors:
 
 | Response                         | Cause and fix                                                                                          |

@@ -38,7 +38,7 @@ curl localhost:8080/healthz
 2. Set `META_APP_SECRET` to the app secret so Zephyr can verify `X-Hub-Signature-256`.
 3. Subscribe the app to the `messages` webhook field.
 4. Set `WEBHOOK_URL` to your service. Zephyr forwards each inbound message and status update there as a signed POST. See [docs/events.md](docs/events.md).
-5. To send messages, set `WA_PHONE_NUMBER_ID`, `WA_ACCESS_TOKEN`, and `API_KEYS`, then call `POST /v1/messages`. See [docs/api.md](docs/api.md).
+5. To send messages and move media, set `WA_PHONE_NUMBER_ID`, `WA_ACCESS_TOKEN`, and `API_KEYS`, then call `POST /v1/messages`, `POST /v1/media`, or `GET /v1/media/{id}`. See [docs/api.md](docs/api.md).
 
 Run `make help` for all targets.
 

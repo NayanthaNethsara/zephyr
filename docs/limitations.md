@@ -12,7 +12,7 @@ This page lists what Zephyr 0.1 does not do and the behaviors to plan around. It
 | One WhatsApp number per deployment    | Webhooks for other numbers are forwarded but sending uses the one configured number | Planned            |
 | No 24-hour session tracking           | Free-form sends outside the window are rejected by Meta, not pre-checked       | Planned                 |
 | No rate limiting                      | Neither inbound requests nor sends are throttled by Zephyr. Meta throttles sends (`rate_limited`) | Planned |
-| No media upload or download           | You can send media by Meta media ID or public link. Zephyr does not upload files to Meta or fetch inbound media | Planned for uploads |
+| No media storage                      | Media streams through Zephyr and is never kept. Your service must store files it wants to keep | By design, optional storage may come later |
 | No dashboard                          | Everything is logs and metrics                                                 | Later                   |
 
 ## Sending
@@ -31,6 +31,22 @@ This page lists what Zephyr 0.1 does not do and the behaviors to plan around. It
 | Error codes follow Meta's published table   | Code `131030` (recipient not allowed on a test number) is not in that table but is handled. Unlisted codes fall back to the HTTP status |
 | API keys are static                         | They live in `API_KEYS`. Rotating or revoking a key means a restart. There are no scopes                       |
 | Sent messages are not stored                | Zephyr logs metadata only (message ID, type, masked number). Delivery results arrive as `message.status` events |
+
+## Media
+
+| Behavior                                      | Detail and workaround                                                                                         |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Zephyr keeps no copy                          | A download is a live pass-through from Meta. Store files you need in your own bucket when you download them    |
+| Inbound media expires after 7 days            | After that `GET /v1/media/{id}` returns `404 media_not_found`. Download shortly after the event arrives        |
+| Uploaded media expires after 30 days          | Upload again if you need to send the same file later, or send it by public `link`                              |
+| Sending by link depends on Meta caching       | Meta caches a linked file for about 10 minutes, so a changed file at the same URL may not be picked up at once |
+| 100 MB cap, and Meta's limits are tighter     | Images 5 MB, audio and video 16 MB, stickers 100 KB or 500 KB. Meta's rejection comes back as `invalid_media`   |
+| MIME type is not checked against a list       | Meta decides what is supported, so new formats work without a release, but a wrong type is learned from Meta   |
+| One upload per request                        | Only the first `file` part is used. Send several files with several requests                                   |
+| An interrupted download cannot change status  | The `200` is already sent. Check the `Content-Length` and the `X-Media-Sha256` header to detect a short file   |
+| Transfers are limited to 5 minutes            | A very slow connection to a 100 MB file may not finish                                                         |
+| No delete endpoint                            | Uploaded media expires on its own after 30 days                                                                |
+| Sizes are not pre-checked against Meta's limits | A 20 MB image is uploaded in full before Meta refuses it                                                      |
 
 ## Delivery behavior
 

@@ -4,7 +4,8 @@ Zephyr gives you two views of what is happening: structured logs to follow a sin
 
 ## What is never recorded
 
-- Message text, media, or any field from the Meta message body, including the body of messages you send
+- Message text, media files, or any field from the Meta message body, including the body of messages you send
+- File names and file content of uploaded and downloaded media. Only the media ID, MIME type, and byte count are logged
 - `WA_ACCESS_TOKEN` and your API keys. A rejected key is logged without its value
 - `META_APP_SECRET`, `WEBHOOK_SIGNING_SECRET`, `META_VERIFY_TOKEN`
 - Full phone numbers. They appear masked as `9477*****00` (first four and last two digits)
@@ -33,6 +34,9 @@ Logs are JSON, one object per line, written to stdout. Set the level with `LOG_L
 | `to`           | Send lines                          | Masked recipient number                                        |
 | `correlation_id` | Send lines                        | Your reference from the request body or `X-Correlation-Id`     |
 | `idempotent`   | Send lines                          | `true` when the request carried an `Idempotency-Key`           |
+| `media_id`     | Media lines                         | Meta's media ID. Not sensitive, and never the file name or content |
+| `bytes`        | Media lines                         | Bytes streamed so far or in total                              |
+| `operation`    | Media failure lines                 | `upload` or `download`                                         |
 | `code`         | `message send failed`               | Zephyr error code such as `window_closed`                      |
 | `meta_code`    | `message send failed`               | Meta's numeric error code, `0` when the error did not come from Meta |
 | `trace_id`     | `message send failed`               | Meta's `fbtrace_id`. Quote it to Meta support                   |
@@ -56,6 +60,11 @@ Logs are JSON, one object per line, written to stdout. Set the level with `LOG_L
 | `message request rejected`              | warn  | A send request was malformed or too large                    |
 | `message sent`                          | info  | Meta accepted a message. Has `wamid`, type, masked number, duration |
 | `message send replayed`                 | info  | A repeated `Idempotency-Key` returned the earlier result without sending |
+| `media uploaded`                        | info  | A file was streamed to Meta. Has `media_id`, `mime_type`, `bytes`, duration |
+| `media downloaded`                      | info  | A file was streamed to your service. Has `media_id`, `mime_type`, `bytes`, duration |
+| `media request rejected`                | warn  | The upload was malformed, for example not multipart or missing a file part |
+| `media request failed`                  | warn or error | Meta refused or was unreachable. Has `code`, `meta_code`, and the `trace_id` |
+| `media stream interrupted`              | error | A download broke after it had started. The bytes sent so far are in `bytes` |
 | `idempotency key could not be recorded, a retry may send the message again` | error | The message was sent but the key could not be saved. Investigate the database |
 | `message send failed`                   | warn or error | A send failed. Error level for gateway or Meta side faults (5xx), warn for rejections |
 
@@ -105,6 +114,9 @@ Prometheus text format at `GET /metrics`. Go runtime and process metrics are inc
 | `zephyr_outbox_stats_error`                    | gauge     | none                  | `1` if the queue could not be read during the scrape      |
 | `zephyr_send_requests_total`                   | counter   | `type`, `result`      | Send requests by message type and result (`sent`, `replayed`, or an error code) |
 | `zephyr_send_duration_seconds`                 | histogram | `type`                | Time to handle a send, including the call to Meta         |
+| `zephyr_media_requests_total`                  | counter   | `operation`, `result` | Media transfers by `upload` or `download` and result (`ok`, `interrupted`, or an error code) |
+| `zephyr_media_duration_seconds`                | histogram | `operation`           | Time to complete a transfer                               |
+| `zephyr_media_bytes_total`                     | counter   | `operation`           | Bytes streamed in each direction                          |
 | `zephyr_http_requests_total`                   | counter   | `method`, `route`, `status` | Request counts                                      |
 | `zephyr_http_request_duration_seconds`         | histogram | `method`, `route`     | Request latency                                           |
 
@@ -130,6 +142,12 @@ sum(rate(zephyr_webhook_requests_total{result="invalid_signature"}[5m]))
 sum(rate(zephyr_send_requests_total{result="sent"}[5m]))
   / sum(rate(zephyr_send_requests_total[5m]))
 
+# Media throughput in bytes per second
+sum by (operation) (rate(zephyr_media_bytes_total[5m]))
+
+# Downloads that could not find their media (expired IDs)
+sum(rate(zephyr_media_requests_total{operation="download",result="media_not_found"}[5m]))
+
 # Retries absorbed by idempotency keys
 sum(rate(zephyr_send_requests_total{result="replayed"}[5m]))
 
@@ -147,6 +165,7 @@ sum by (result) (rate(zephyr_send_requests_total{result!="sent"}[5m]))
 | Signature rejections       | `rate(zephyr_webhook_requests_total{result="invalid_signature"}[5m]) > 0` | Wrong app secret, or someone is probing the endpoint |
 | Not scraping               | `zephyr_outbox_stats_error == 1`                                  | The store cannot be read                                 |
 | Token problem              | `increase(zephyr_send_requests_total{result="upstream_auth_failed"}[10m]) > 0` | The Meta access token expired or lost permission |
+| Broken downloads           | `increase(zephyr_media_requests_total{result="interrupted"}[15m]) > 0` | Media downloads are dropping midway |
 | Sends failing              | `sum(rate(zephyr_send_requests_total{result=~"upstream_.*|rate_limited"}[5m])) > 0` | Meta is rejecting, throttling, or unreachable |
 
 ### Scrape configuration

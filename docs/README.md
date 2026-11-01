@@ -5,7 +5,7 @@
 | [getting-started.md](getting-started.md)           | Set up Meta, run Zephyr, and receive your first message                 |
 | [architecture.md](architecture.md)                 | Understand how the current build is structured and why                  |
 | [user-flows.md](user-flows.md)                     | Follow each scenario step by step: setup, inbound, retries, restart     |
-| [api.md](api.md)                                   | Send messages: authentication, every message type, errors               |
+| [api.md](api.md)                                   | Send messages and move media: authentication, every message type, errors |
 | [events.md](events.md)                             | Implement the receiving side: envelope, headers, signature verification |
 | [telemetry.md](telemetry.md)                       | Trace a single message and monitor the gateway                          |
 | [tech.md](tech.md)                                 | Look up configuration, endpoints, schema, timings, and tooling          |

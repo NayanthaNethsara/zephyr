@@ -267,3 +267,41 @@ What your service sees on a retry depends on how the first attempt ended:
 | Never reached Zephyr                           | Sends normally, since the key was never claimed                      |
 
 Use one key per logical message and a different key for each new message. Reusing a key for a different message returns `422 idempotency_key_reused` so a bug on your side cannot silently drop a message.
+
+## Flow 17: Handling a photo the customer sent
+
+```mermaid
+sequenceDiagram
+    participant P as Customer
+    participant M as Meta
+    participant Z as Zephyr
+    participant U as Your service
+    participant B as Your storage
+
+    P->>M: Sends a photo
+    M->>Z: POST /webhook (media id inside the message)
+    Z->>U: message.inbound event, data.type "image"
+    U->>U: Read data.raw.image.id
+    U->>Z: GET /v1/media/{id}
+    Z->>M: Look up the file URL, then download it
+    M-->>Z: bytes
+    Z-->>U: bytes streamed with Content-Type and X-Media-Sha256
+    U->>B: Store the file, verify the SHA-256
+```
+
+Zephyr does not keep the photo. Your service downloads it and stores it wherever it wants, for example in its own S3 bucket. Do this soon after the event, because Meta keeps inbound media for 7 days. A `404 media_not_found` means the file has expired or the ID is wrong. Download failures such as `502` are worth retrying, because the event itself is already safely delivered.
+
+## Flow 18: Sending a file
+
+```mermaid
+flowchart TD
+    A{"Where is the file?"} -->|"already at a public https URL"| B["POST /v1/messages with link"]
+    A -->|"on your server or in storage"| C["POST /v1/media (multipart)"]
+    C --> D{"201 with an id?"}
+    D -->|"no"| E["Read the code: invalid_media, rate_limited, 413"]
+    D -->|"yes"| F["POST /v1/messages with the id"]
+    B --> G["Message accepted, wamid returned"]
+    F --> G
+```
+
+Uploading once and sending the same ID to many customers is cheaper than uploading for every message. An uploaded ID is valid for 30 days. Sending by `link` skips the upload step, but Meta fetches the file from your URL, so it must be public and reachable over HTTPS.

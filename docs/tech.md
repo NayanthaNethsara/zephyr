@@ -5,7 +5,7 @@
 | Layer          | Choice                                   | Notes                                                    |
 | -------------- | ---------------------------------------- | -------------------------------------------------------- |
 | Language       | Go 1.26                                  | Version is set by a dependency requirement in `go.mod`   |
-| Meta client    | `net/http`                               | Graph API `POST /{version}/{phone_number_id}/messages`    |
+| Meta client    | `net/http`                               | Graph API messages, media upload, and the two-step media download |
 | HTTP framework | Gin                                      | Release mode, custom logging middleware                  |
 | Storage        | SQLite via `modernc.org/sqlite`          | Pure Go, no CGO, WAL mode                                |
 | Migrations     | `pressly/goose` with embedded SQL        | Applied at startup                                       |
@@ -69,6 +69,8 @@ Sending is on only when `WA_PHONE_NUMBER_ID` and `WA_ACCESS_TOKEN` are both set.
 | GET    | `/readyz`  | none                          | Database is reachable             | `200 {"status":"ready"}`, `503`               |
 | GET    | `/metrics` | none                          | Prometheus metrics                | `200`                                         |
 | POST   | `/v1/messages` | `Authorization: Bearer <api key>` | Send a WhatsApp message (only when sending is enabled) | `200`, `400`, `401`, `413`, `422`, `429`, `500`, `502`, `504` |
+| POST   | `/v1/media`    | `Authorization: Bearer <api key>` | Stream a file to Meta and return its media ID (only when sending is enabled) | `201`, `400`, `401`, `413`, `422`, `429`, `500`, `502`, `504` |
+| GET    | `/v1/media/{id}` | `Authorization: Bearer <api key>` | Stream inbound or uploaded media from Meta (only when sending is enabled) | `200`, `400`, `401`, `404`, `429`, `500`, `502`, `504` |
 
 The sending endpoint is documented in [api.md](api.md). Every response carries an `X-Request-Id` header. Do not expose `/metrics`, `/healthz`, or `/readyz` publicly. Route only `/webhook` through your reverse proxy.
 
@@ -149,6 +151,9 @@ Migrations are applied automatically at startup. To add one, create the next num
 | Server idle timeout           | 2 min                                           |
 | Send request body limit       | 1 MiB                                           |
 | Call to Meta (send)           | 15 s                                            |
+| Media transfer                | 5 min, and Zephyr extends the server read and write deadlines to 6 min for these two routes |
+| Media upload size             | 100 MB                                          |
+| Wait for Meta media headers   | 30 s                                            |
 | Idempotency in-flight lease   | 60 s                                            |
 | Idempotency key length        | 1 to 255 printable ASCII characters, no spaces  |
 | Graceful shutdown timeout     | 30 s                                            |

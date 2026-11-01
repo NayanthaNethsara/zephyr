@@ -237,6 +237,46 @@ stateDiagram-v2
 
 Meta error handling follows Meta's own guidance to branch on the error `code` and not on subcodes or HTTP status. The classification is a table in `internal/meta/errors.go` and it is the single place to add a code. Codes that Meta does not list fall back to the HTTP status: `429` is rate limited, `5xx` is unavailable, `401` and `403` are authentication failures, anything else is a rejection. A response with no error object, such as a proxy's HTML page, is classified by status alone.
 
+## Media path
+
+Media is streamed through Zephyr and never stored. There is no S3 dependency and nothing to clean up.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as Your service
+    participant A as API
+    participant C as core
+    participant M as meta client
+    participant G as Meta Graph API
+    participant F as Meta file server
+
+    U->>A: GET /v1/media/1234567890
+    A->>C: Download(id)
+    C->>C: Validate the id (letters, digits, - and _)
+    C->>M: DownloadMedia(id)
+    M->>G: GET /{version}/{id}
+    G-->>M: url, mime_type, sha256, file_size
+    M->>M: Require an https url
+    M->>F: GET url with the access token
+    F-->>M: file bytes
+    M-->>A: body stream + metadata
+    A-->>U: 200 headers, then bytes copied as they arrive
+```
+
+| Property                | Behavior                                                                                           |
+| ----------------------- | -------------------------------------------------------------------------------------------------- |
+| Memory                  | Constant. Bytes are copied from Meta to the caller in small chunks, nothing is buffered whole      |
+| Upload                  | The caller's multipart body is re-encoded on the fly into Meta's multipart request through a pipe  |
+| Deadlines               | The server's 30 second read and write deadlines are lifted to 6 minutes for the two media routes   |
+| Size limit              | 100 MB, enforced while streaming. Meta enforces the stricter per-type limits                       |
+| Caller disconnects      | The request context is cancelled, which stops the transfer on both sides                          |
+| A failing source        | If the caller's upload breaks, the error is attributed to the caller (400 or 413), not to Meta     |
+| Interrupted download    | The status is already sent, so Zephyr logs `media stream interrupted`. The declared `Content-Length` lets the client detect the short body |
+| Download URL safety     | Only `https` locations are followed, and the access token is sent only with the request to that URL |
+| Filenames               | Reduced to a base name with quotes and control characters removed before they reach Meta          |
+| What is not stored      | File content, filenames, and URLs. Logs carry the media ID, MIME type, and byte count only        |
+
 ## Delivery path and outbox lifecycle
 
 ```mermaid
@@ -356,4 +396,6 @@ A dedup key whose TTL has expired is treated as new, even before the janitor rem
 | Key in a header, not the body     | One place for the key, matching the common `Idempotency-Key` convention, and no chance of the two disagreeing |
 | Content passed to Meta unchanged  | New Meta message features work without a Zephyr release. Only required fields are validated         |
 | Optional sending                  | Receive-only deployments need no token or API keys and expose no `/v1` routes                        |
+| Streaming media with no storage   | Meta already keeps the files, so Zephyr needs no bucket, disk, or cleanup, and stays free of media state |
+| Multipart upload, MIME from the part | One obvious way to upload with `curl -F`, and the type travels with the file instead of a second field |
 | Pure Go SQLite driver             | Keeps the binary static, no CGO, small distroless image                                             |

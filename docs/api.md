@@ -1,6 +1,6 @@
 # Sending API
 
-Zephyr sends WhatsApp messages through `POST /v1/messages`. The call waits for Meta's answer and returns the WhatsApp message ID (`wamid`) or a structured error. Sending is optional and turns on only when `WA_PHONE_NUMBER_ID`, `WA_ACCESS_TOKEN`, and `API_KEYS` are configured. Without them the `/v1` routes do not exist and Zephyr stays receive-only.
+Zephyr sends WhatsApp messages through `POST /v1/messages` and moves media files with `POST /v1/media` and `GET /v1/media/{id}` (see [Media](#media)). The call waits for Meta's answer and returns the WhatsApp message ID (`wamid`) or a structured error. Sending is optional and turns on only when `WA_PHONE_NUMBER_ID`, `WA_ACCESS_TOKEN`, and `API_KEYS` are configured. Without them the `/v1` routes do not exist and Zephyr stays receive-only.
 
 ## Authentication
 
@@ -66,7 +66,7 @@ Unknown top-level fields are rejected with `400` so a misspelled field is never 
 | ------------------------- | ---- | --------- | -------------------------------------------------------------------------- |
 | `invalid_request`         | 400  | no        | Bad body, unknown field, or a rejected parameter. Fix the request          |
 | `unauthorized`            | 401  | no        | Missing or wrong API key                                                   |
-| `payload_too_large`       | 413  | no        | Body over 1 MiB                                                            |
+| `payload_too_large`       | 413  | no        | A message body over 1 MiB, or a media file over 100 MB                     |
 | `window_closed`           | 422  | no        | The 24-hour customer service window is closed. Send a template message     |
 | `recipient_undeliverable` | 422  | no        | Not a WhatsApp number, recipient blocked or opted out, or held for ecosystem health |
 | `recipient_not_allowed`   | 422  | no        | Test numbers can only message recipients added in the Meta dashboard       |
@@ -77,6 +77,7 @@ Unknown top-level fields are rejected with `400` so a misspelled field is never 
 | `rate_limited`            | 429  | yes       | Meta throughput or pair limit. Wait and retry                              |
 | `request_in_progress`     | 409  | yes       | Another request with the same `Idempotency-Key` is still running. Wait a moment and retry with the same key |
 | `idempotency_key_reused`  | 422  | no        | The key was already used with a different message. Use a new key for a new message |
+| `media_not_found`         | 404  | no        | Meta no longer has this media. Inbound media IDs expire after 7 days, uploaded ones after 30 |
 | `upstream_auth_failed`    | 502  | no        | The configured access token is invalid, expired, or lacks permission. Fix `WA_ACCESS_TOKEN` |
 | `sender_misconfigured`    | 502  | no        | The WhatsApp number or billing is not ready. Fix it in the Meta dashboard  |
 | `upstream_unavailable`    | 502  | yes       | Meta or the network failed. Retry                                          |
@@ -194,6 +195,96 @@ Reference media by `id` (uploaded to Meta beforehand) or by public HTTPS `link`,
 ```json
 { "to": "94770000000", "type": "reaction", "reaction": { "message_id": "wamid.HBgL...", "emoji": "<emoji character>" } }
 ```
+
+## Media
+
+Zephyr moves media between your service and Meta without storing it. Files stream straight through, so memory use stays flat for a 100 MB video and there is nothing to clean up. Zephyr needs no S3 bucket or disk space for media.
+
+```mermaid
+flowchart LR
+    subgraph Inbound
+        direction LR
+        P1["Customer sends a photo"] --> M1["Meta stores it"]
+        M1 -->|"webhook with media id"| Z1["Zephyr"]
+        Z1 -->|"message.inbound event"| U1["Your service"]
+        U1 -->|"GET /v1/media/{id}"| Z1
+        Z1 -->|"streams bytes"| U1
+    end
+    subgraph Outbound
+        direction LR
+        U2["Your service"] -->|"POST /v1/media"| Z2["Zephyr"]
+        Z2 -->|"streams file"| M2["Meta"]
+        M2 -->|"media id"| U2
+        U2 -->|"POST /v1/messages with the id"| Z2
+    end
+```
+
+Both endpoints use the same API key as sending and exist only when sending is enabled.
+
+### Download inbound media
+
+When a customer sends an image, video, audio, document, or sticker, the `message.inbound` event carries the media ID inside the original message under `data.raw`, in an object named after the type:
+
+```json
+{
+  "type": "message.inbound",
+  "data": {
+    "type": "image",
+    "raw": { "type": "image", "image": { "id": "1234567890", "mime_type": "image/jpeg", "sha256": "..." } }
+  }
+}
+```
+
+Fetch the bytes with that ID:
+
+```sh
+curl -H "Authorization: Bearer $ZEPHYR_API_KEY" \
+  http://localhost:8080/v1/media/1234567890 -o photo.jpg
+```
+
+| Response header   | Value                                                          |
+| ----------------- | -------------------------------------------------------------- |
+| `Content-Type`    | The media's MIME type, or `application/octet-stream` if unknown |
+| `Content-Length`  | The file size when Meta reports it                              |
+| `X-Media-Sha256`  | Meta's SHA-256 of the file, so you can verify the download      |
+
+Download soon after the event arrives. Meta keeps inbound media IDs for 7 days, and Zephyr does not keep a copy. If your service needs the file longer, store it in your own bucket when you download it. A missing or expired file returns `404 media_not_found`.
+
+### Upload media for sending
+
+```sh
+curl -X POST http://localhost:8080/v1/media \
+  -H "Authorization: Bearer $ZEPHYR_API_KEY" \
+  -F "file=@invoice.pdf;type=application/pdf"
+```
+
+```json
+{ "id": "9876543210", "mime_type": "application/pdf" }
+```
+
+The request must be `multipart/form-data` with a part named `file`. The part's `Content-Type` is the MIME type and is required, so `curl -F "file=@x.png;type=image/png"` sets it for you. Other form fields are ignored. The response is `201`.
+
+Then send it by ID:
+
+```json
+{ "to": "94770000000", "type": "document", "document": { "id": "9876543210", "filename": "invoice.pdf" } }
+```
+
+Uploaded media IDs stay valid for 30 days. If you already host the file at a public HTTPS URL, you can skip the upload and send it with `link` instead.
+
+### Limits
+
+Meta enforces the per-type limits and Zephyr returns its rejection as `invalid_media`.
+
+| Type     | Formats                                                                  | Max size                      |
+| -------- | ------------------------------------------------------------------------ | ----------------------------- |
+| Image    | JPEG, PNG (8-bit RGB or RGBA)                                            | 5 MB                          |
+| Audio    | AAC, AMR, MP3, M4A, OGG (Opus only)                                      | 16 MB                         |
+| Video    | MP4 and 3GP, H.264 video with AAC audio                                  | 16 MB                         |
+| Document | PDF, TXT, DOC, DOCX, XLS, XLSX, PPT, PPTX                                | 100 MB                        |
+| Sticker  | WebP                                                                     | 100 KB static, 500 KB animated |
+
+Zephyr itself refuses uploads over 100 MB with `413 payload_too_large`, before they use more bandwidth. A transfer may take up to 5 minutes. For a media ID, Zephyr accepts 1 to 128 letters, digits, hyphens, and underscores.
 
 ## What Zephyr validates
 

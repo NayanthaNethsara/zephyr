@@ -42,3 +42,19 @@ def verify(secret: bytes, timestamp: str, body: bytes, header: str) -> bool:
     expected = "sha256=" + hmac.new(secret, timestamp.encode() + b"." + body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, header)
 ```
+
+## Media in inbound events
+
+For `image`, `video`, `audio`, `document`, and `sticker` messages, the media is not inside the event. The original Meta message under `data.raw` holds a media object named after the type, with the media `id`, `mime_type`, and `sha256`.
+
+```json
+{
+  "type": "message.inbound",
+  "data": {
+    "type": "image",
+    "raw": { "type": "image", "image": { "id": "1234567890", "mime_type": "image/jpeg", "sha256": "..." } }
+  }
+}
+```
+
+Download the file with `GET /v1/media/1234567890` and your API key, as described in [api.md](api.md). Do it soon, since Meta keeps inbound media for 7 days.

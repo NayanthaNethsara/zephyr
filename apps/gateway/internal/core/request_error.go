@@ -16,11 +16,12 @@ const (
 	CodeUpstreamUnavailable    = "upstream_unavailable"
 	CodeUpstreamTimeout        = "upstream_timeout"
 	CodeRejected               = "rejected"
+	CodeMediaNotFound          = "media_not_found"
 	CodeRequestInProgress      = "request_in_progress"
 	CodeIdempotencyKeyReused   = "idempotency_key_reused"
 )
 
-type SendError struct {
+type RequestError struct {
 	Code        string
 	Message     string
 	IsRetryable bool
@@ -28,6 +29,6 @@ type SendError struct {
 	TraceID     string
 }
 
-func (e *SendError) Error() string {
+func (e *RequestError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Code, e.Message)
 }

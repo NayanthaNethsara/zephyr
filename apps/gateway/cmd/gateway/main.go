@@ -77,13 +77,11 @@ func run() error {
 	sweeper := janitor.New(db, janitorInterval, cfg.FailedRetention, logger)
 
 	var messageSender api.MessageSender
+	var mediaProvider api.MediaProvider
 	if cfg.SendingEnabled() {
-		messageSender = core.NewSender(
-			meta.NewClient(graphBaseURL, cfg.MetaAPIVersion, cfg.WAAccessToken),
-			db,
-			cfg.WAPhoneNumberID,
-			cfg.IdempotencyTTL,
-		)
+		graphClient := meta.NewClient(graphBaseURL, cfg.MetaAPIVersion, cfg.WAAccessToken)
+		messageSender = core.NewSender(graphClient, db, cfg.WAPhoneNumberID, cfg.IdempotencyTTL)
+		mediaProvider = core.NewMediaService(graphClient, graphClient, cfg.WAPhoneNumberID)
 	}
 
 	var background sync.WaitGroup
@@ -103,6 +101,7 @@ func run() error {
 			Recorder:        metrics,
 			MetricsHandler:  metrics.Handler(),
 			Sender:          messageSender,
+			Media:           mediaProvider,
 			APIKeys:         cfg.APIKeyList(),
 			MetaAppSecret:   cfg.MetaAppSecret,
 			MetaVerifyToken: cfg.MetaVerifyToken,

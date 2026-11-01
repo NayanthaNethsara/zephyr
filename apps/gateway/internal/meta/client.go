@@ -16,8 +16,9 @@ import (
 )
 
 const (
-	requestTimeout   = 15 * time.Second
-	maxResponseBytes = 1 << 20
+	requestTimeout           = 15 * time.Second
+	maxResponseBytes         = 1 << 20
+	metaCodeInvalidParameter = 100
 )
 
 type Client struct {
@@ -25,6 +26,7 @@ type Client struct {
 	apiVersion  string
 	accessToken string
 	httpClient  *http.Client
+	mediaClient *http.Client
 }
 
 func NewClient(baseURL, apiVersion, accessToken string) *Client {
@@ -33,6 +35,7 @@ func NewClient(baseURL, apiVersion, accessToken string) *Client {
 		apiVersion:  apiVersion,
 		accessToken: accessToken,
 		httpClient:  &http.Client{Timeout: requestTimeout},
+		mediaClient: newMediaClient(),
 	}
 }
 
@@ -81,7 +84,7 @@ func (c *Client) Send(ctx context.Context, phoneNumberID string, message core.Ou
 
 	payload, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes))
 	if err != nil {
-		return core.SendResult{}, &core.SendError{Code: core.CodeUpstreamUnavailable, Message: "could not read the response from Meta", IsRetryable: true}
+		return core.SendResult{}, unreadableResponse()
 	}
 
 	if response.StatusCode < 200 || response.StatusCode > 299 {
@@ -93,12 +96,12 @@ func (c *Client) Send(ctx context.Context, phoneNumberID string, message core.Ou
 func parseSuccess(payload []byte) (core.SendResult, error) {
 	var parsed sendResponse
 	if err := json.Unmarshal(payload, &parsed); err != nil || len(parsed.Messages) == 0 || parsed.Messages[0].ID == "" {
-		return core.SendResult{}, &core.SendError{Code: core.CodeUpstreamUnavailable, Message: "Meta returned an unexpected response", IsRetryable: true}
+		return core.SendResult{}, unexpectedResponse()
 	}
 	return core.SendResult{MessageID: parsed.Messages[0].ID}, nil
 }
 
-func apiError(httpStatus int, payload []byte) *core.SendError {
+func apiError(httpStatus int, payload []byte) *core.RequestError {
 	var parsed errorResponse
 	_ = json.Unmarshal(payload, &parsed)
 
@@ -114,7 +117,7 @@ func apiError(httpStatus int, payload []byte) *core.SendError {
 		message = fmt.Sprintf("Meta responded with status %d", httpStatus)
 	}
 
-	return &core.SendError{
+	return &core.RequestError{
 		Code:        classified.code,
 		Message:     message,
 		IsRetryable: classified.isRetryable,
@@ -127,10 +130,10 @@ func hasErrorObject(parsed errorResponse) bool {
 	return parsed.Error.Code != 0 || parsed.Error.Message != ""
 }
 
-func transportError(err error) *core.SendError {
+func transportError(err error) *core.RequestError {
 	var netErr net.Error
 	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) {
-		return &core.SendError{Code: core.CodeUpstreamTimeout, Message: "Meta did not respond in time", IsRetryable: true}
+		return &core.RequestError{Code: core.CodeUpstreamTimeout, Message: "Meta did not respond in time", IsRetryable: true}
 	}
-	return &core.SendError{Code: core.CodeUpstreamUnavailable, Message: "could not reach Meta", IsRetryable: true}
+	return &core.RequestError{Code: core.CodeUpstreamUnavailable, Message: "could not reach Meta", IsRetryable: true}
 }

@@ -228,20 +228,20 @@ func TestSendMessageErrors(t *testing.T) {
 		wantMetaCode  float64
 		wantResult    string
 	}{
-		{name: "invalid request from core", err: &core.SendError{Code: core.CodeInvalidRequest, Message: "text.body is required"}, wantStatus: 400, wantCode: "invalid_request", wantResult: "text:invalid_request"},
-		{name: "window closed", err: &core.SendError{Code: core.CodeWindowClosed, Message: "closed", MetaCode: 131047}, wantStatus: 422, wantCode: "window_closed", wantMetaCode: 131047, wantResult: "text:window_closed"},
-		{name: "recipient undeliverable", err: &core.SendError{Code: core.CodeRecipientUndeliverable, Message: "x", MetaCode: 131026}, wantStatus: 422, wantCode: "recipient_undeliverable", wantMetaCode: 131026, wantResult: "text:recipient_undeliverable"},
-		{name: "recipient not allowed", err: &core.SendError{Code: core.CodeRecipientNotAllowed, Message: "x", MetaCode: 131030}, wantStatus: 422, wantCode: "recipient_not_allowed", wantMetaCode: 131030, wantResult: "text:recipient_not_allowed"},
-		{name: "template error", err: &core.SendError{Code: core.CodeTemplateError, Message: "x", MetaCode: 132001}, wantStatus: 422, wantCode: "template_error", wantMetaCode: 132001, wantResult: "text:template_error"},
-		{name: "sending restricted", err: &core.SendError{Code: core.CodeSendingRestricted, Message: "x"}, wantStatus: 422, wantCode: "sending_restricted", wantResult: "text:sending_restricted"},
-		{name: "generic rejection", err: &core.SendError{Code: core.CodeRejected, Message: "x"}, wantStatus: 422, wantCode: "rejected", wantResult: "text:rejected"},
-		{name: "rate limited", err: &core.SendError{Code: core.CodeRateLimited, Message: "slow down", IsRetryable: true, MetaCode: 130429}, wantStatus: 429, wantCode: "rate_limited", wantRetryable: true, wantMetaCode: 130429, wantResult: "text:rate_limited"},
-		{name: "upstream unavailable", err: &core.SendError{Code: core.CodeUpstreamUnavailable, Message: "down", IsRetryable: true}, wantStatus: 502, wantCode: "upstream_unavailable", wantRetryable: true, wantResult: "text:upstream_unavailable"},
-		{name: "upstream auth failed", err: &core.SendError{Code: core.CodeUpstreamAuthFailed, Message: "token", MetaCode: 190}, wantStatus: 502, wantCode: "upstream_auth_failed", wantMetaCode: 190, wantResult: "text:upstream_auth_failed"},
-		{name: "sender misconfigured", err: &core.SendError{Code: core.CodeSenderMisconfigured, Message: "x"}, wantStatus: 502, wantCode: "sender_misconfigured", wantResult: "text:sender_misconfigured"},
-		{name: "upstream timeout", err: &core.SendError{Code: core.CodeUpstreamTimeout, Message: "slow", IsRetryable: true}, wantStatus: 504, wantCode: "upstream_timeout", wantRetryable: true, wantResult: "text:upstream_timeout"},
-		{name: "request in progress", err: &core.SendError{Code: core.CodeRequestInProgress, Message: "busy", IsRetryable: true}, wantStatus: 409, wantCode: "request_in_progress", wantRetryable: true, wantResult: "text:request_in_progress"},
-		{name: "idempotency key reused", err: &core.SendError{Code: core.CodeIdempotencyKeyReused, Message: "reused"}, wantStatus: 422, wantCode: "idempotency_key_reused", wantResult: "text:idempotency_key_reused"},
+		{name: "invalid request from core", err: &core.RequestError{Code: core.CodeInvalidRequest, Message: "text.body is required"}, wantStatus: 400, wantCode: "invalid_request", wantResult: "text:invalid_request"},
+		{name: "window closed", err: &core.RequestError{Code: core.CodeWindowClosed, Message: "closed", MetaCode: 131047}, wantStatus: 422, wantCode: "window_closed", wantMetaCode: 131047, wantResult: "text:window_closed"},
+		{name: "recipient undeliverable", err: &core.RequestError{Code: core.CodeRecipientUndeliverable, Message: "x", MetaCode: 131026}, wantStatus: 422, wantCode: "recipient_undeliverable", wantMetaCode: 131026, wantResult: "text:recipient_undeliverable"},
+		{name: "recipient not allowed", err: &core.RequestError{Code: core.CodeRecipientNotAllowed, Message: "x", MetaCode: 131030}, wantStatus: 422, wantCode: "recipient_not_allowed", wantMetaCode: 131030, wantResult: "text:recipient_not_allowed"},
+		{name: "template error", err: &core.RequestError{Code: core.CodeTemplateError, Message: "x", MetaCode: 132001}, wantStatus: 422, wantCode: "template_error", wantMetaCode: 132001, wantResult: "text:template_error"},
+		{name: "sending restricted", err: &core.RequestError{Code: core.CodeSendingRestricted, Message: "x"}, wantStatus: 422, wantCode: "sending_restricted", wantResult: "text:sending_restricted"},
+		{name: "generic rejection", err: &core.RequestError{Code: core.CodeRejected, Message: "x"}, wantStatus: 422, wantCode: "rejected", wantResult: "text:rejected"},
+		{name: "rate limited", err: &core.RequestError{Code: core.CodeRateLimited, Message: "slow down", IsRetryable: true, MetaCode: 130429}, wantStatus: 429, wantCode: "rate_limited", wantRetryable: true, wantMetaCode: 130429, wantResult: "text:rate_limited"},
+		{name: "upstream unavailable", err: &core.RequestError{Code: core.CodeUpstreamUnavailable, Message: "down", IsRetryable: true}, wantStatus: 502, wantCode: "upstream_unavailable", wantRetryable: true, wantResult: "text:upstream_unavailable"},
+		{name: "upstream auth failed", err: &core.RequestError{Code: core.CodeUpstreamAuthFailed, Message: "token", MetaCode: 190}, wantStatus: 502, wantCode: "upstream_auth_failed", wantMetaCode: 190, wantResult: "text:upstream_auth_failed"},
+		{name: "sender misconfigured", err: &core.RequestError{Code: core.CodeSenderMisconfigured, Message: "x"}, wantStatus: 502, wantCode: "sender_misconfigured", wantResult: "text:sender_misconfigured"},
+		{name: "upstream timeout", err: &core.RequestError{Code: core.CodeUpstreamTimeout, Message: "slow", IsRetryable: true}, wantStatus: 504, wantCode: "upstream_timeout", wantRetryable: true, wantResult: "text:upstream_timeout"},
+		{name: "request in progress", err: &core.RequestError{Code: core.CodeRequestInProgress, Message: "busy", IsRetryable: true}, wantStatus: 409, wantCode: "request_in_progress", wantRetryable: true, wantResult: "text:request_in_progress"},
+		{name: "idempotency key reused", err: &core.RequestError{Code: core.CodeIdempotencyKeyReused, Message: "reused"}, wantStatus: 422, wantCode: "idempotency_key_reused", wantResult: "text:idempotency_key_reused"},
 		{name: "unexpected error", err: errors.New("boom"), wantStatus: 500, wantCode: "internal_error", wantResult: "text:internal_error"},
 	}
 
@@ -294,7 +294,7 @@ func TestSendMessageRecordsMetrics(t *testing.T) {
 			recorder := &fakeRecorder{}
 			sender := &fakeMessageSender{result: core.SendResult{MessageID: "wamid.OK"}, err: tt.sendErr}
 			if strings.Contains(tt.body, "made-up-type") {
-				sender.err = &core.SendError{Code: core.CodeInvalidRequest, Message: "type is not supported"}
+				sender.err = &core.RequestError{Code: core.CodeInvalidRequest, Message: "type is not supported"}
 			}
 
 			postMessage(newSendRouter(sender, recorder), "Bearer "+testAPIKey, tt.body, nil)

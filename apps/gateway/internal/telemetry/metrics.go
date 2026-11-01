@@ -23,6 +23,9 @@ type Metrics struct {
 	httpDuration     *prometheus.HistogramVec
 	sendRequests     *prometheus.CounterVec
 	sendDuration     *prometheus.HistogramVec
+	mediaRequests    *prometheus.CounterVec
+	mediaDuration    *prometheus.HistogramVec
+	mediaBytes       *prometheus.CounterVec
 }
 
 func New() *Metrics {
@@ -77,6 +80,22 @@ func New() *Metrics {
 			Help:      "Time to handle a send request, including the call to Meta.",
 			Buckets:   prometheus.DefBuckets,
 		}, []string{"type"}),
+		mediaRequests: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "media_requests_total",
+			Help:      "Media upload and download requests by operation and result (ok, interrupted, or an error code).",
+		}, []string{"operation", "result"}),
+		mediaDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: namespace,
+			Name:      "media_duration_seconds",
+			Help:      "Time to complete a media transfer.",
+			Buckets:   []float64{0.1, 0.5, 1, 2, 5, 10, 30, 60, 120, 300},
+		}, []string{"operation"}),
+		mediaBytes: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "media_bytes_total",
+			Help:      "Bytes streamed through media uploads and downloads.",
+		}, []string{"operation"}),
 	}
 
 	m.registry.MustRegister(
@@ -91,6 +110,9 @@ func New() *Metrics {
 		m.httpDuration,
 		m.sendRequests,
 		m.sendDuration,
+		m.mediaRequests,
+		m.mediaDuration,
+		m.mediaBytes,
 	)
 	return m
 }
@@ -128,4 +150,12 @@ func (m *Metrics) HTTPRequest(method, route string, status int, took time.Durati
 func (m *Metrics) SendResult(messageType, result string, took time.Duration) {
 	m.sendRequests.WithLabelValues(messageType, result).Inc()
 	m.sendDuration.WithLabelValues(messageType).Observe(took.Seconds())
+}
+
+func (m *Metrics) MediaResult(operation, result string, size int64, took time.Duration) {
+	m.mediaRequests.WithLabelValues(operation, result).Inc()
+	m.mediaDuration.WithLabelValues(operation).Observe(took.Seconds())
+	if size > 0 {
+		m.mediaBytes.WithLabelValues(operation).Add(float64(size))
+	}
 }

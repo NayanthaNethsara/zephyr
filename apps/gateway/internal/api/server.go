@@ -20,6 +20,7 @@ type Recorder interface {
 	WebhookResult(result string)
 	EventIngested(eventType string, isQueued bool)
 	SendResult(messageType, result string, took time.Duration)
+	MediaResult(operation, result string, size int64, took time.Duration)
 	HTTPRequest(method, route string, status int, took time.Duration)
 }
 
@@ -28,6 +29,7 @@ type Deps struct {
 	Recorder        Recorder
 	MetricsHandler  http.Handler
 	Sender          MessageSender
+	Media           MediaProvider
 	APIKeys         []string
 	MetaAppSecret   string
 	MetaVerifyToken string
@@ -49,9 +51,15 @@ func NewRouter(deps Deps) *gin.Engine {
 	router.GET("/readyz", h.readyz)
 	router.GET("/webhook", h.verifyWebhook)
 	router.POST("/webhook", h.receiveWebhook)
-	if deps.Sender != nil {
+	if deps.Sender != nil || deps.Media != nil {
 		v1 := router.Group("/v1", requireAPIKey(newKeyRing(deps.APIKeys), deps.Logger))
-		v1.POST("/messages", h.sendMessage)
+		if deps.Sender != nil {
+			v1.POST("/messages", h.sendMessage)
+		}
+		if deps.Media != nil {
+			v1.POST("/media", h.uploadMedia)
+			v1.GET("/media/:id", h.downloadMedia)
+		}
 	}
 	if deps.MetricsHandler != nil {
 		router.GET("/metrics", gin.WrapH(deps.MetricsHandler))

@@ -105,39 +105,45 @@ func (h *handler) respondSent(c *gin.Context, logger *slog.Logger, message core.
 	c.JSON(http.StatusOK, sendResponse{WAMID: result.MessageID, CorrelationID: message.CorrelationID})
 }
 
+func describeError(err error) (int, errorBody, *core.RequestError) {
+	var requestErr *core.RequestError
+	if !errors.As(err, &requestErr) {
+		return http.StatusInternalServerError, errorBody{Code: codeInternalError, Message: "the request could not be completed"}, nil
+	}
+	return statusForCode(requestErr.Code), errorBody{
+		Code:        requestErr.Code,
+		Message:     requestErr.Message,
+		IsRetryable: requestErr.IsRetryable,
+		MetaCode:    requestErr.MetaCode,
+	}, requestErr
+}
+
 func (h *handler) failSend(c *gin.Context, logger *slog.Logger, message core.OutboundMessage, started time.Time, err error) {
-	var sendErr *core.SendError
-	if !errors.As(err, &sendErr) {
-		h.deps.Recorder.SendResult(metricType(message.Type), codeInternalError, time.Since(started))
+	status, body, requestErr := describeError(err)
+	took := time.Since(started)
+	h.deps.Recorder.SendResult(metricType(message.Type), body.Code, took)
+
+	if requestErr == nil {
 		logger.Error("message send failed unexpectedly", "type", message.Type, "error", err)
-		c.JSON(http.StatusInternalServerError, errorBody{Code: codeInternalError, Message: "the message could not be sent"})
+		c.JSON(status, body)
 		return
 	}
-
-	status := statusForCode(sendErr.Code)
-	took := time.Since(started)
-	h.deps.Recorder.SendResult(metricType(message.Type), sendErr.Code, took)
 
 	log := logger.Warn
 	if status >= http.StatusInternalServerError {
 		log = logger.Error
 	}
 	log("message send failed",
-		"code", sendErr.Code,
-		"retryable", sendErr.IsRetryable,
-		"meta_code", sendErr.MetaCode,
-		"trace_id", sendErr.TraceID,
+		"code", requestErr.Code,
+		"retryable", requestErr.IsRetryable,
+		"meta_code", requestErr.MetaCode,
+		"trace_id", requestErr.TraceID,
 		"type", message.Type,
 		"to", core.MaskPhone(message.To),
 		"correlation_id", message.CorrelationID,
 		"duration_ms", took.Milliseconds(),
 	)
-	c.JSON(status, errorBody{
-		Code:        sendErr.Code,
-		Message:     sendErr.Message,
-		IsRetryable: sendErr.IsRetryable,
-		MetaCode:    sendErr.MetaCode,
-	})
+	c.JSON(status, body)
 }
 
 func (h *handler) rejectSend(c *gin.Context, logger *slog.Logger, message core.OutboundMessage, started time.Time, status int, body errorBody) {
@@ -227,6 +233,10 @@ func statusForCode(code string) int {
 	switch code {
 	case core.CodeInvalidRequest:
 		return http.StatusBadRequest
+	case core.CodeMediaNotFound:
+		return http.StatusNotFound
+	case codePayloadTooLarge:
+		return http.StatusRequestEntityTooLarge
 	case core.CodeRateLimited:
 		return http.StatusTooManyRequests
 	case core.CodeRequestInProgress:

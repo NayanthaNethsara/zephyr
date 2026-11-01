@@ -106,13 +106,13 @@ func (s *Sender) sendOnce(ctx context.Context, message OutboundMessage) (SendRes
 	case store.IdempotencyCompleted:
 		return SendResult{MessageID: claimed.MessageID, IsReplay: true}, nil
 	case store.IdempotencyInProgress:
-		return SendResult{}, &SendError{
+		return SendResult{}, &RequestError{
 			Code:        CodeRequestInProgress,
 			Message:     "a request with this idempotency key is still being processed",
 			IsRetryable: true,
 		}
 	case store.IdempotencyMismatch:
-		return SendResult{}, &SendError{
+		return SendResult{}, &RequestError{
 			Code:    CodeIdempotencyKeyReused,
 			Message: "this idempotency key was already used with a different message",
 		}
@@ -137,6 +137,6 @@ func (s *Sender) deliverAndSettle(ctx context.Context, message OutboundMessage) 
 	return result, nil
 }
 
-func invalidRequest(message string) *SendError {
-	return &SendError{Code: CodeInvalidRequest, Message: message}
+func invalidRequest(message string) *RequestError {
+	return &RequestError{Code: CodeInvalidRequest, Message: message}
 }

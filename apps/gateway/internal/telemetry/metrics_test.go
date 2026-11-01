@@ -98,6 +98,21 @@ func TestRecordedMetricsAreExposed(t *testing.T) {
 			},
 		},
 		{
+			name: "media transfers are counted with their bytes",
+			record: func(m *Metrics) {
+				m.MediaResult("upload", "ok", 2048, 2*time.Second)
+				m.MediaResult("download", "ok", 4096, time.Second)
+				m.MediaResult("download", "media_not_found", 0, 100*time.Millisecond)
+			},
+			want: []string{
+				`zephyr_media_requests_total{operation="upload",result="ok"} 1`,
+				`zephyr_media_requests_total{operation="download",result="media_not_found"} 1`,
+				`zephyr_media_bytes_total{operation="upload"} 2048`,
+				`zephyr_media_bytes_total{operation="download"} 4096`,
+				`zephyr_media_duration_seconds_count{operation="download"} 2`,
+			},
+		},
+		{
 			name:   "go runtime metrics are always present",
 			record: func(*Metrics) {},
 			want:   []string{"go_goroutines"},

@@ -83,7 +83,7 @@ func TestValidateOutbound(t *testing.T) {
 				}
 				return
 			}
-			var sendErr *SendError
+			var sendErr *RequestError
 			if !errors.As(err, &sendErr) || sendErr.Code != CodeInvalidRequest || sendErr.IsRetryable {
 				t.Fatalf("error = %#v, want non-retryable invalid_request", err)
 			}
@@ -95,7 +95,7 @@ func TestValidateOutbound(t *testing.T) {
 }
 
 func TestSenderSend(t *testing.T) {
-	upstream := &SendError{Code: CodeWindowClosed, Message: "window closed", MetaCode: 131047}
+	upstream := &RequestError{Code: CodeWindowClosed, Message: "window closed", MetaCode: 131047}
 
 	tests := []struct {
 		name          string
@@ -160,7 +160,7 @@ func TestSenderSend(t *testing.T) {
 				}
 				return
 			}
-			var sendErr *SendError
+			var sendErr *RequestError
 			if !errors.As(err, &sendErr) || sendErr.Code != tt.wantCode {
 				t.Fatalf("error = %#v, want code %s", err, tt.wantCode)
 			}
@@ -207,7 +207,7 @@ func TestSenderIdempotency(t *testing.T) {
 	textMessage := func(key string) OutboundMessage {
 		return OutboundMessage{To: "94770000000", Type: MessageText, Content: json.RawMessage(`{"body":"hi"}`), IdempotencyKey: key}
 	}
-	upstream := &SendError{Code: CodeUpstreamTimeout, Message: "slow", IsRetryable: true}
+	upstream := &RequestError{Code: CodeUpstreamTimeout, Message: "slow", IsRetryable: true}
 
 	tests := []struct {
 		name              string
@@ -316,12 +316,12 @@ func TestSenderIdempotency(t *testing.T) {
 
 			switch {
 			case tt.wantPlainError:
-				var sendErr *SendError
+				var sendErr *RequestError
 				if err == nil || errors.As(err, &sendErr) {
 					t.Fatalf("error = %#v, want a plain internal error", err)
 				}
 			case tt.wantCode != "":
-				var sendErr *SendError
+				var sendErr *RequestError
 				if !errors.As(err, &sendErr) || sendErr.Code != tt.wantCode {
 					t.Fatalf("error = %#v, want code %s", err, tt.wantCode)
 				}

@@ -209,13 +209,13 @@ func TestClientSendResponses(t *testing.T) {
 				}
 				return
 			}
-			var sendErr *core.SendError
+			var sendErr *core.RequestError
 			if !errors.As(err, &sendErr) {
-				t.Fatalf("error = %#v, want a SendError", err)
+				t.Fatalf("error = %#v, want a RequestError", err)
 			}
 			if sendErr.Code != tt.wantCode || sendErr.IsRetryable != tt.wantRetryable || sendErr.MetaCode != tt.wantMetaCode ||
 				sendErr.TraceID != tt.wantTraceID || sendErr.Message != tt.wantMessage {
-				t.Fatalf("SendError = %+v", sendErr)
+				t.Fatalf("RequestError = %+v", sendErr)
 			}
 		})
 	}
@@ -276,7 +276,7 @@ func TestClientSendTransportFailures(t *testing.T) {
 
 			_, err := client.Send(ctx, "111", textMessage())
 
-			var sendErr *core.SendError
+			var sendErr *core.RequestError
 			if !errors.As(err, &sendErr) || sendErr.Code != tt.wantCode || !sendErr.IsRetryable {
 				t.Fatalf("error = %#v, want retryable %s", err, tt.wantCode)
 			}

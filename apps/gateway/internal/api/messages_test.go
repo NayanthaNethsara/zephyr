@@ -15,8 +15,8 @@ import (
 )
 
 const (
-	testAPIKey       = "first-api-key-0123456789abcdef0123"
-	secondTestAPIKey = "second-api-key-0123456789abcdef012"
+	firstTestKey  = "first-api-key-0123456789abcdef0123"
+	secondTestKey = "second-api-key-0123456789abcdef012"
 )
 
 type fakeMessageSender struct {
@@ -35,7 +35,7 @@ func newSendRouter(sender MessageSender, recorder Recorder) http.Handler {
 		Ingestor: &fakeIngestor{},
 		Recorder: recorder,
 		Sender:   sender,
-		APIKeys:  []string{testAPIKey, secondTestAPIKey},
+		APIKeys:  []string{firstTestKey, secondTestKey},
 		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 }
@@ -71,15 +71,15 @@ func TestMessagesRequireAPIKey(t *testing.T) {
 		wantStatus    int
 		wantSent      int
 	}{
-		{name: "first key", authorization: "Bearer " + testAPIKey, wantStatus: http.StatusOK, wantSent: 1},
-		{name: "second key", authorization: "Bearer " + secondTestAPIKey, wantStatus: http.StatusOK, wantSent: 1},
-		{name: "scheme is case insensitive", authorization: "bearer " + testAPIKey, wantStatus: http.StatusOK, wantSent: 1},
+		{name: "first key", authorization: "Bearer " + firstTestKey, wantStatus: http.StatusOK, wantSent: 1},
+		{name: "second key", authorization: "Bearer " + secondTestKey, wantStatus: http.StatusOK, wantSent: 1},
+		{name: "scheme is case insensitive", authorization: "bearer " + firstTestKey, wantStatus: http.StatusOK, wantSent: 1},
 		{name: "no header", authorization: "", wantStatus: http.StatusUnauthorized},
 		{name: "wrong key", authorization: "Bearer not-a-real-key", wantStatus: http.StatusUnauthorized},
-		{name: "key without scheme", authorization: testAPIKey, wantStatus: http.StatusUnauthorized},
-		{name: "basic scheme", authorization: "Basic " + testAPIKey, wantStatus: http.StatusUnauthorized},
+		{name: "key without scheme", authorization: firstTestKey, wantStatus: http.StatusUnauthorized},
+		{name: "basic scheme", authorization: "Basic " + firstTestKey, wantStatus: http.StatusUnauthorized},
 		{name: "empty token", authorization: "Bearer ", wantStatus: http.StatusUnauthorized},
-		{name: "key with trailing characters", authorization: "Bearer " + testAPIKey + "x", wantStatus: http.StatusUnauthorized},
+		{name: "key with trailing characters", authorization: "Bearer " + firstTestKey + "x", wantStatus: http.StatusUnauthorized},
 	}
 
 	for _, tt := range tests {
@@ -107,7 +107,7 @@ func TestSendRoutesAreAbsentWithoutASender(t *testing.T) {
 		name          string
 		authorization string
 	}{
-		{name: "request with a key", authorization: "Bearer " + testAPIKey},
+		{name: "request with a key", authorization: "Bearer " + firstTestKey},
 		{name: "request without a key", authorization: ""},
 	}
 	for _, tt := range tests {
@@ -181,7 +181,7 @@ func TestSendMessageParsing(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			sender := &fakeMessageSender{result: core.SendResult{MessageID: "wamid.OK"}}
-			rec := postMessage(newSendRouter(sender, &fakeRecorder{}), "Bearer "+testAPIKey, tt.body, tt.headers)
+			rec := postMessage(newSendRouter(sender, &fakeRecorder{}), "Bearer "+firstTestKey, tt.body, tt.headers)
 
 			if rec.Code != tt.wantStatus {
 				t.Fatalf("status = %d, want %d (body %s)", rec.Code, tt.wantStatus, rec.Body.String())
@@ -250,7 +250,7 @@ func TestSendMessageErrors(t *testing.T) {
 			recorder := &fakeRecorder{}
 			sender := &fakeMessageSender{err: tt.err}
 
-			rec := postMessage(newSendRouter(sender, recorder), "Bearer "+testAPIKey, `{"to":"94770000000","type":"text","text":{"body":"hi"}}`, nil)
+			rec := postMessage(newSendRouter(sender, recorder), "Bearer "+firstTestKey, `{"to":"94770000000","type":"text","text":{"body":"hi"}}`, nil)
 
 			if rec.Code != tt.wantStatus {
 				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
@@ -297,7 +297,7 @@ func TestSendMessageRecordsMetrics(t *testing.T) {
 				sender.err = &core.RequestError{Code: core.CodeInvalidRequest, Message: "type is not supported"}
 			}
 
-			postMessage(newSendRouter(sender, recorder), "Bearer "+testAPIKey, tt.body, nil)
+			postMessage(newSendRouter(sender, recorder), "Bearer "+firstTestKey, tt.body, nil)
 
 			if len(recorder.sends) != 1 || recorder.sends[0] != tt.wantRecord {
 				t.Fatalf("recorded sends = %v, want [%s]", recorder.sends, tt.wantRecord)
@@ -323,7 +323,7 @@ func TestSendMessageBodyLimit(t *testing.T) {
 			sender := &fakeMessageSender{result: core.SendResult{MessageID: "wamid.OK"}}
 			body := `{"to":"94770000000","type":"text","text":{"body":"` + strings.Repeat("a", tt.textSize) + `"}}`
 
-			rec := postMessage(newSendRouter(sender, &fakeRecorder{}), "Bearer "+testAPIKey, body, nil)
+			rec := postMessage(newSendRouter(sender, &fakeRecorder{}), "Bearer "+firstTestKey, body, nil)
 
 			if rec.Code != tt.wantStatus || len(sender.sent) != tt.wantSent {
 				t.Fatalf("status = %d, sent = %d, want %d and %d", rec.Code, len(sender.sent), tt.wantStatus, tt.wantSent)
@@ -367,7 +367,7 @@ func TestIdempotencyKeyHeader(t *testing.T) {
 				headers["Idempotency-Key"] = tt.header
 			}
 
-			rec := postMessage(newSendRouter(sender, recorder), "Bearer "+testAPIKey, body, headers)
+			rec := postMessage(newSendRouter(sender, recorder), "Bearer "+firstTestKey, body, headers)
 
 			if rec.Code != tt.wantStatus {
 				t.Fatalf("status = %d, want %d (body %s)", rec.Code, tt.wantStatus, rec.Body.String())

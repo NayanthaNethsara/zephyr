@@ -104,11 +104,11 @@ func TestSendThroughRealCoreAndMetaClient(t *testing.T) {
 				Ingestor: &fakeIngestor{},
 				Recorder: &fakeRecorder{},
 				Sender:   sender,
-				APIKeys:  []string{testAPIKey},
+				APIKeys:  []string{firstTestKey},
 				Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 			})
 
-			rec := postMessage(router, "Bearer "+testAPIKey, tt.requestBody, nil)
+			rec := postMessage(router, "Bearer "+firstTestKey, tt.requestBody, nil)
 
 			if rec.Code != tt.wantStatus || graphHits != tt.wantGraphHits {
 				t.Fatalf("status = %d, graph hits = %d, want %d and %d (body %s)", rec.Code, graphHits, tt.wantStatus, tt.wantGraphHits, rec.Body.String())
@@ -252,7 +252,7 @@ func TestIdempotentSendThroughRealCoreAndMetaClient(t *testing.T) {
 				Ingestor: &fakeIngestor{},
 				Recorder: recorder,
 				Sender:   sender,
-				APIKeys:  []string{testAPIKey},
+				APIKeys:  []string{firstTestKey},
 				Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 			})
 
@@ -263,7 +263,7 @@ func TestIdempotentSendThroughRealCoreAndMetaClient(t *testing.T) {
 					headers["Idempotency-Key"] = c.key
 				}
 
-				rec := postMessage(router, "Bearer "+testAPIKey, c.body, headers)
+				rec := postMessage(router, "Bearer "+firstTestKey, c.body, headers)
 
 				if rec.Code != c.wantStatus || graphHits != c.wantGraphHits {
 					t.Fatalf("call %d: status = %d, graph hits = %d, want %d and %d (body %s)", i, rec.Code, graphHits, c.wantStatus, c.wantGraphHits, rec.Body.String())

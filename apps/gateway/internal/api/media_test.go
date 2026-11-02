@@ -71,7 +71,7 @@ func newMediaRouter(backend *fakeMediaBackend, recorder Recorder) http.Handler {
 		Ingestor: &fakeIngestor{},
 		Recorder: recorder,
 		Media:    core.NewMediaService(backend, backend, backend, "111"),
-		APIKeys:  []string{testAPIKey},
+		APIKeys:  []string{firstTestKey},
 		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 }
@@ -111,7 +111,7 @@ func buildMultipart(t *testing.T, parts ...formPart) (io.Reader, string) {
 
 func doRequest(router http.Handler, method, target, contentType string, body io.Reader) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(method, target, body)
-	request.Header.Set("Authorization", "Bearer "+testAPIKey)
+	request.Header.Set("Authorization", "Bearer "+firstTestKey)
 	if contentType != "" {
 		request.Header.Set("Content-Type", contentType)
 	}
@@ -137,7 +137,7 @@ func TestMediaRoutesRequireAPIKey(t *testing.T) {
 	}{
 		{name: "no header", authorization: "", wantStatus: http.StatusUnauthorized},
 		{name: "wrong key", authorization: "Bearer nope", wantStatus: http.StatusUnauthorized},
-		{name: "valid key reaches the handler", authorization: "Bearer " + testAPIKey, wantStatus: http.StatusBadRequest},
+		{name: "valid key reaches the handler", authorization: "Bearer " + firstTestKey, wantStatus: http.StatusBadRequest},
 	}
 
 	for _, route := range routes {
@@ -362,7 +362,7 @@ func TestUploadMediaSizeAndTruncation(t *testing.T) {
 				}
 				if tt.truncateAt > 0 {
 					_, _ = io.CopyN(part, zeroReader{}, tt.truncateAt)
-					writer.Close()
+					_ = writer.Close()
 					return
 				}
 				_, err = io.CopyN(part, zeroReader{}, tt.fileBytes)
@@ -606,7 +606,7 @@ func TestMediaTransfersOutliveTheServerDeadlines(t *testing.T) {
 			name: "download slower than the write timeout completes",
 			run: func(t *testing.T, serverURL string) {
 				request, _ := http.NewRequest(http.MethodGet, serverURL+"/v1/media/42", nil)
-				request.Header.Set("Authorization", "Bearer "+testAPIKey)
+				request.Header.Set("Authorization", "Bearer "+firstTestKey)
 
 				response, err := http.DefaultClient.Do(request)
 				if err != nil {
@@ -638,7 +638,7 @@ func TestMediaTransfersOutliveTheServerDeadlines(t *testing.T) {
 				}()
 
 				request, _ := http.NewRequest(http.MethodPost, serverURL+"/v1/media", reader)
-				request.Header.Set("Authorization", "Bearer "+testAPIKey)
+				request.Header.Set("Authorization", "Bearer "+firstTestKey)
 				request.Header.Set("Content-Type", form.FormDataContentType())
 
 				response, err := http.DefaultClient.Do(request)

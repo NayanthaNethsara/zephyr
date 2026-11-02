@@ -63,7 +63,7 @@ func (s *Store) Close() error {
 }
 
 func createPrivateFile(path string) error {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, dbFilePermissions)
+	file, err := os.OpenFile(filepath.Clean(path), os.O_CREATE|os.O_RDWR, dbFilePermissions)
 	if err != nil {
 		return fmt.Errorf("create database file: %w", err)
 	}

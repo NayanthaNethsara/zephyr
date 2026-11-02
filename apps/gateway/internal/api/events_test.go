@@ -41,7 +41,7 @@ func newEventsRouter(events *fakeEvents, recorder Recorder) http.Handler {
 		Ingestor: &fakeIngestor{},
 		Recorder: recorder,
 		Events:   events,
-		APIKeys:  []string{testAPIKey},
+		APIKeys:  []string{firstTestKey},
 		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 }
@@ -62,7 +62,7 @@ func TestEventRoutesRequireAPIKey(t *testing.T) {
 	}{
 		{name: "no header", authorization: "", wantStatus: http.StatusUnauthorized},
 		{name: "wrong key", authorization: "Bearer nope", wantStatus: http.StatusUnauthorized},
-		{name: "valid key", authorization: "Bearer " + testAPIKey},
+		{name: "valid key", authorization: "Bearer " + firstTestKey},
 	}
 
 	for _, route := range routes {

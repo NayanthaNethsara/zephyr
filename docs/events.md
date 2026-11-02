@@ -45,7 +45,7 @@ def verify(secret: bytes, timestamp: str, body: bytes, header: str) -> bool:
 
 ## Media in inbound events
 
-For `image`, `video`, `audio`, `document`, and `sticker` messages, the media is not inside the event. The original Meta message under `data.raw` holds a media object named after the type, with the media `id`, `mime_type`, and `sha256`.
+For `image`, `video`, `audio`, `document`, and `sticker` messages, the media is not inside the event. The original Meta message under `data.raw` holds a media object named after the type, with the media `id`, `mime_type`, and `sha256`. Images, videos, and documents may also carry `caption`, and documents carry `filename`. Meta is rolling out a `url` field as well, which you can ignore, because `GET /v1/media/{id}` is the supported way to download.
 
 ```json
 {

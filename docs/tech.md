@@ -52,7 +52,7 @@ Values come from environment variables. A `.env` file is loaded by `make` and by
 | `META_API_VERSION`       | `v24.0`                     | Graph API version, in the form `v24.0`                    |
 | `WA_PHONE_NUMBER_ID`     | empty                       | Your WhatsApp phone number ID. Enables sending            |
 | `WA_ACCESS_TOKEN`        | empty                       | Meta access token. Must be set together with the number ID |
-| `API_KEYS`               | empty                       | Comma-separated keys for `/v1`. Required when sending is on, each at least 32 characters |
+| `API_KEYS`               | empty                       | Comma-separated keys for `/v1`. Required when sending is on, and also turns on the failed-event routes. Each at least 32 characters |
 | `IDEMPOTENCY_TTL`        | `24h`                       | Greater than zero. How long a successful send is remembered per `Idempotency-Key` |
 
 Sending is on only when `WA_PHONE_NUMBER_ID` and `WA_ACCESS_TOKEN` are both set. Setting just one is a startup error, and so is enabling sending without `API_KEYS`. These replace the `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_ACCESS_TOKEN`, and `WHATSAPP_API_VERSION` names used by the old NestJS gateway. Zephyr ignores the old names.

@@ -147,21 +147,27 @@ Every outcome is counted in `zephyr_webhook_requests_total{result=...}`.
 
 ## Flow 10: Handling a failed event
 
-Events that exhaust their attempts stay in the outbox as `failed` for `FAILED_RETENTION` (7 days by default) and then are deleted. This release has no API to list or replay them. To inspect them, query the database:
+Events that exhaust their attempts stay in the outbox as `failed` for `FAILED_RETENTION` (7 days by default) and then are deleted. After you fix your service, list them and replay each one through the API, which needs only `API_KEYS`.
 
-```sh
-sqlite3 data/gateway.db \
-  "SELECT id, topic, attempts, last_error, datetime(updated_at/1000,'unixepoch') FROM outbox_entries WHERE state='failed'"
+```mermaid
+sequenceDiagram
+    participant Z as Zephyr
+    participant U as Your service
+    participant O as You or a script
+
+    Z->>U: delivery attempts 1 to 8 fail
+    Note over Z: event marked failed, last_error saved
+    O->>Z: GET /v1/events/failed
+    Z-->>O: id, attempts, last_error, timestamps
+    Note over U: you fix the problem
+    O->>Z: POST /v1/events/{id}/replay
+    Z-->>O: 202 queued
+    Z->>U: delivery with the same X-Gateway-Delivery id
+    U-->>Z: 200
+    Note over Z: event deleted, gone from the failed list
 ```
 
-To retry a failed event, set it back to pending:
-
-```sh
-sqlite3 data/gateway.db \
-  "UPDATE outbox_entries SET state='pending', attempts=0, next_attempt_at=0 WHERE id='evt_...'"
-```
-
-Do this with Zephyr stopped, or accept that it runs against a live database in WAL mode. A proper list and replay API is planned.
+A replayed event keeps its original ID, so your idempotent handler treats a second copy safely. Replaying an ID that is not failed returns `404 event_not_found`, which also makes a double click harmless. See [api.md](api.md#failed-events) for the request and response shapes.
 
 ## Flow 11: Graceful shutdown
 
@@ -298,7 +304,7 @@ flowchart TD
     A{"Where is the file?"} -->|"already at a public https URL"| B["POST /v1/messages with link"]
     A -->|"on your server or in storage"| C["POST /v1/media (multipart)"]
     C --> D{"201 with an id?"}
-    D -->|"no"| E["Read the code: invalid_media, rate_limited, 413"]
+    D -->|"no"| E["Read the code: invalid_media, rate_limited, payload_too_large"]
     D -->|"yes"| F["POST /v1/messages with the id"]
     B --> G["Message accepted, wamid returned"]
     F --> G

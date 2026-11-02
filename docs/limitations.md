@@ -6,7 +6,6 @@ This page lists what Zephyr 0.1 does not do and the behaviors to plan around. It
 
 | Gap                                   | Impact                                                                        | Status                  |
 | ------------------------------------- | ----------------------------------------------------------------------------- | ----------------------- |
-| No list or replay API for failed events | Failed events need manual SQL to inspect or retry (see user-flows.md, flow 10) | Planned               |
 | Only the `http` transport             | No NATS, Redis, RabbitMQ, or Kafka delivery                                    | Planned                 |
 | SQLite only                           | No PostgreSQL support                                                          | Planned                 |
 | One WhatsApp number per deployment    | Webhooks for other numbers are forwarded but sending uses the one configured number | Planned            |
@@ -40,13 +39,11 @@ This page lists what Zephyr 0.1 does not do and the behaviors to plan around. It
 | Inbound media expires after 7 days            | After that `GET /v1/media/{id}` returns `404 media_not_found`. Download shortly after the event arrives        |
 | Uploaded media expires after 30 days          | Upload again if you need to send the same file later, or send it by public `link`                              |
 | Sending by link depends on Meta caching       | Meta caches a linked file for about 10 minutes, so a changed file at the same URL may not be picked up at once |
-| 100 MB cap, and Meta's limits are tighter     | Images 5 MB, audio and video 16 MB, stickers 100 KB or 500 KB. Meta's rejection comes back as `invalid_media`   |
+| Size limits follow the MIME type              | Images 5 MB, audio and video 16 MB, stickers 500 KB, everything else 100 MB. Over the limit returns `413`, and a static sticker between 100 and 500 KB is left for Meta to refuse |
 | MIME type is not checked against a list       | Meta decides what is supported, so new formats work without a release, but a wrong type is learned from Meta   |
 | One upload per request                        | Only the first `file` part is used. Send several files with several requests                                   |
 | An interrupted download cannot change status  | The `200` is already sent. Check the `Content-Length` and the `X-Media-Sha256` header to detect a short file   |
 | Transfers are limited to 5 minutes            | A very slow connection to a 100 MB file may not finish                                                         |
-| No delete endpoint                            | Uploaded media expires on its own after 30 days                                                                |
-| Sizes are not pre-checked against Meta's limits | A 20 MB image is uploaded in full before Meta refuses it                                                      |
 
 ## Delivery behavior
 

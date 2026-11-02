@@ -36,7 +36,7 @@ Logs are JSON, one object per line, written to stdout. Set the level with `LOG_L
 | `idempotent`   | Send lines                          | `true` when the request carried an `Idempotency-Key`           |
 | `media_id`     | Media lines                         | Meta's media ID. Not sensitive, and never the file name or content |
 | `bytes`        | Media lines                         | Bytes streamed so far or in total                              |
-| `operation`    | Media failure lines                 | `upload` or `download`                                         |
+| `operation`    | Media failure lines                 | `upload`, `download`, or `delete`                              |
 | `code`         | `message send failed`               | Zephyr error code such as `window_closed`                      |
 | `meta_code`    | `message send failed`               | Meta's numeric error code, `0` when the error did not come from Meta |
 | `trace_id`     | `message send failed`               | Meta's `fbtrace_id`. Quote it to Meta support                   |
@@ -62,6 +62,9 @@ Logs are JSON, one object per line, written to stdout. Set the level with `LOG_L
 | `message send replayed`                 | info  | A repeated `Idempotency-Key` returned the earlier result without sending |
 | `media uploaded`                        | info  | A file was streamed to Meta. Has `media_id`, `mime_type`, `bytes`, duration |
 | `media downloaded`                      | info  | A file was streamed to your service. Has `media_id`, `mime_type`, `bytes`, duration |
+| `media deleted`                         | info  | A file was removed at Meta. Has `media_id` and duration |
+| `failed event queued for replay`        | info  | A failed event went back to the delivery queue. Has `event_id` |
+| `failed event request rejected`         | warn  | A list or replay call was refused, for example an unknown event ID |
 | `media request rejected`                | warn  | The upload was malformed, for example not multipart or missing a file part |
 | `media request failed`                  | warn or error | Meta refused or was unreachable. Has `code`, `meta_code`, and the `trace_id` |
 | `media stream interrupted`              | error | A download broke after it had started. The bytes sent so far are in `bytes` |
@@ -114,9 +117,10 @@ Prometheus text format at `GET /metrics`. Go runtime and process metrics are inc
 | `zephyr_outbox_stats_error`                    | gauge     | none                  | `1` if the queue could not be read during the scrape      |
 | `zephyr_send_requests_total`                   | counter   | `type`, `result`      | Send requests by message type and result (`sent`, `replayed`, or an error code) |
 | `zephyr_send_duration_seconds`                 | histogram | `type`                | Time to handle a send, including the call to Meta         |
-| `zephyr_media_requests_total`                  | counter   | `operation`, `result` | Media transfers by `upload` or `download` and result (`ok`, `interrupted`, or an error code) |
+| `zephyr_media_requests_total`                  | counter   | `operation`, `result` | Media requests by `upload`, `download`, or `delete` and result (`ok`, `interrupted`, or an error code) |
 | `zephyr_media_duration_seconds`                | histogram | `operation`           | Time to complete a transfer                               |
 | `zephyr_media_bytes_total`                     | counter   | `operation`           | Bytes streamed in each direction                          |
+| `zephyr_event_replays_total`                   | counter   | `result`              | Replay requests by result (`queued`, `event_not_found`, or another error code) |
 | `zephyr_http_requests_total`                   | counter   | `method`, `route`, `status` | Request counts                                      |
 | `zephyr_http_request_duration_seconds`         | histogram | `method`, `route`     | Request latency                                           |
 
@@ -160,7 +164,7 @@ sum by (result) (rate(zephyr_send_requests_total{result!="sent"}[5m]))
 | Alert                      | Condition                                                         | Meaning                                                  |
 | -------------------------- | ----------------------------------------------------------------- | -------------------------------------------------------- |
 | Backlog growing            | `zephyr_outbox_oldest_pending_age_seconds > 300` for 5 minutes    | Your service is down or slow                             |
-| Events failing permanently | `increase(zephyr_outbox_entries{state="failed"}[1h]) > 0`         | Events exhausted retries and need manual attention       |
+| Events failing permanently | `zephyr_outbox_entries{state="failed"} > 0`                       | Events exhausted retries. List them with `GET /v1/events/failed` and replay them |
 | Persistence errors         | `increase(zephyr_webhook_requests_total{result="persist_error"}[5m]) > 0` | Disk or database trouble, Meta is retrying       |
 | Signature rejections       | `rate(zephyr_webhook_requests_total{result="invalid_signature"}[5m]) > 0` | Wrong app secret, or someone is probing the endpoint |
 | Not scraping               | `zephyr_outbox_stats_error == 1`                                  | The store cannot be read                                 |

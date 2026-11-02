@@ -38,7 +38,7 @@ curl localhost:8080/healthz
 2. Set `META_APP_SECRET` to the app secret so Zephyr can verify `X-Hub-Signature-256`.
 3. Subscribe the app to the `messages` webhook field.
 4. Set `WEBHOOK_URL` to your service. Zephyr forwards each inbound message and status update there as a signed POST. See [docs/events.md](docs/events.md).
-5. To send messages and move media, set `WA_PHONE_NUMBER_ID`, `WA_ACCESS_TOKEN`, and `API_KEYS`, then call `POST /v1/messages`, `POST /v1/media`, or `GET /v1/media/{id}`. See [docs/api.md](docs/api.md).
+5. To send messages and move media, set `WA_PHONE_NUMBER_ID`, `WA_ACCESS_TOKEN`, and `API_KEYS`, then call `POST /v1/messages` or the `/v1/media` routes. See [docs/api.md](docs/api.md).
 
 Run `make help` for all targets.
 
@@ -70,7 +70,7 @@ make down
 | `META_API_VERSION`       | `v24.0`                     | Graph API version used for sending                 |
 | `WA_PHONE_NUMBER_ID`     | empty                       | Your WhatsApp phone number ID. Enables sending     |
 | `WA_ACCESS_TOKEN`        | empty                       | Meta access token. Set together with the number ID |
-| `API_KEYS`               | empty                       | Keys for `/v1`. Required when sending is enabled   |
+| `API_KEYS`               | empty                       | Keys for `/v1`. Required for sending, and enables failed-event replay |
 | `IDEMPOTENCY_TTL`        | `24h`                       | How long a successful send is remembered per key   |
 
 ## Security notes

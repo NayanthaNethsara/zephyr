@@ -1,6 +1,6 @@
 # Sending API
 
-Zephyr sends WhatsApp messages through `POST /v1/messages` and moves media files with `POST /v1/media` and `GET /v1/media/{id}` (see [Media](#media)). The call waits for Meta's answer and returns the WhatsApp message ID (`wamid`) or a structured error. Sending is optional and turns on only when `WA_PHONE_NUMBER_ID`, `WA_ACCESS_TOKEN`, and `API_KEYS` are configured. Without them the `/v1` routes do not exist and Zephyr stays receive-only.
+Zephyr sends WhatsApp messages through `POST /v1/messages` and moves media files with `POST /v1/media`, `GET /v1/media/{id}` and `DELETE /v1/media/{id}` (see [Media](#media)). It also lists failed deliveries and replays them (see [Failed events](#failed-events)). The call waits for Meta's answer and returns the WhatsApp message ID (`wamid`) or a structured error. Sending is optional and turns on only when `WA_PHONE_NUMBER_ID`, `WA_ACCESS_TOKEN`, and `API_KEYS` are configured. Without them the send and media routes do not exist and Zephyr stays receive-only. The failed-event routes need only `API_KEYS`, so a receive-only deployment can still inspect and replay failed deliveries.
 
 ## Authentication
 
@@ -66,7 +66,7 @@ Unknown top-level fields are rejected with `400` so a misspelled field is never 
 | ------------------------- | ---- | --------- | -------------------------------------------------------------------------- |
 | `invalid_request`         | 400  | no        | Bad body, unknown field, or a rejected parameter. Fix the request          |
 | `unauthorized`            | 401  | no        | Missing or wrong API key                                                   |
-| `payload_too_large`       | 413  | no        | A message body over 1 MiB, or a media file over 100 MB                     |
+| `payload_too_large`       | 413  | no        | A message body over 1 MiB, or a media file over the limit for its type     |
 | `window_closed`           | 422  | no        | The 24-hour customer service window is closed. Send a template message     |
 | `recipient_undeliverable` | 422  | no        | Not a WhatsApp number, recipient blocked or opted out, or held for ecosystem health |
 | `recipient_not_allowed`   | 422  | no        | Test numbers can only message recipients added in the Meta dashboard       |
@@ -272,9 +272,18 @@ Then send it by ID:
 
 Uploaded media IDs stay valid for 30 days. If you already host the file at a public HTTPS URL, you can skip the upload and send it with `link` instead.
 
+### Delete media
+
+```sh
+curl -X DELETE http://localhost:8080/v1/media/9876543210 \
+  -H "Authorization: Bearer $ZEPHYR_API_KEY"
+```
+
+The response is `204` with no body. Meta removes the file and its ID stops working, which is useful for sensitive documents you no longer want held at Meta. An ID Meta no longer knows returns `404 media_not_found`, so deleting twice is safe to treat as done. This works for uploaded and inbound media alike.
+
 ### Limits
 
-Meta enforces the per-type limits and Zephyr returns its rejection as `invalid_media`.
+Zephyr checks the size of an upload against the limit for its MIME type while streaming, and stops with `413 payload_too_large` as soon as the file goes over, so an oversized file is not sent to Meta in full. Meta still judges formats and returns its rejection as `invalid_media`.
 
 | Type     | Formats                                                                  | Max size                      |
 | -------- | ------------------------------------------------------------------------ | ----------------------------- |
@@ -284,7 +293,56 @@ Meta enforces the per-type limits and Zephyr returns its rejection as `invalid_m
 | Document | PDF, TXT, DOC, DOCX, XLS, XLSX, PPT, PPTX                                | 100 MB                        |
 | Sticker  | WebP                                                                     | 100 KB static, 500 KB animated |
 
-Zephyr itself refuses uploads over 100 MB with `413 payload_too_large`, before they use more bandwidth. A transfer may take up to 5 minutes. For a media ID, Zephyr accepts 1 to 128 letters, digits, hyphens, and underscores.
+Any MIME type not listed above, such as a type Meta adds later, uses the 100 MB document limit. `image/webp` is treated as a sticker, since Meta accepts WebP only for stickers, so it gets the larger animated limit of 500 KB. A transfer may take up to 5 minutes. For a media ID, Zephyr accepts 1 to 128 letters, digits, hyphens, and underscores.
+
+## Failed events
+
+When Zephyr cannot deliver an inbound event to your `WEBHOOK_URL` after `RETRY_MAX_ATTEMPTS` attempts, the event is kept as failed for `FAILED_RETENTION` (7 days by default). Once your service is back, list the failed events and replay them.
+
+### List failed events
+
+```sh
+curl -H "Authorization: Bearer $ZEPHYR_API_KEY" \
+  "http://localhost:8080/v1/events/failed?limit=50&offset=0"
+```
+
+```json
+{
+  "events": [
+    {
+      "id": "evt_b9e1cbf95bc0903025b1c4cb6199c68f",
+      "topic": "wa.inbound",
+      "attempts": 8,
+      "last_error": "webhook responded with status 503",
+      "created_at": "2026-11-01T14:28:18Z",
+      "failed_at": "2026-11-01T14:31:02Z"
+    }
+  ],
+  "limit": 50,
+  "offset": 0
+}
+```
+
+The newest failure comes first. `limit` is 1 to 200 and defaults to 50, and `offset` defaults to 0. A page shorter than `limit` is the last one. `last_error` is the reason for the final attempt. It names the status code or the network error, which can include your service's host and port, and never includes the message content or your signing secret. The event body is not listed. Your service receives it again on replay.
+
+### Replay an event
+
+```sh
+curl -X POST -H "Authorization: Bearer $ZEPHYR_API_KEY" \
+  http://localhost:8080/v1/events/evt_b9e1cbf95bc0903025b1c4cb6199c68f/replay
+```
+
+```json
+{ "id": "evt_b9e1cbf95bc0903025b1c4cb6199c68f", "status": "queued" }
+```
+
+The response is `202`. Zephyr resets the attempt count and the delivery worker sends the event again within about a second, with the same `X-Gateway-Delivery` ID as the first time, so your idempotent handling still applies. If it fails again, it goes through the full retry cycle and returns to the failed list.
+
+| Status | `code`            | Meaning                                                                          |
+| ------ | ----------------- | -------------------------------------------------------------------------------- |
+| 202    | none              | The event is queued                                                              |
+| 400    | `invalid_request` | The event ID has characters outside letters, digits, hyphens, and underscores, or `limit` and `offset` are out of range |
+| 404    | `event_not_found` | No failed event has this ID. It was already replayed, still retrying, or past retention |
 
 ## What Zephyr validates
 

@@ -102,10 +102,10 @@ Rules enforced by convention (see `AGENT.md`):
 | ----------------------------- | --------------------------------------------------------------------------------------------------- |
 | `cmd/gateway`                 | Loads config, builds everything, starts the server, worker and janitor, handles shutdown            |
 | `internal/config`             | Reads environment variables over defaults and validates them                                        |
-| `internal/api`                | Gin routes: `/webhook`, `/v1/messages`, `/healthz`, `/readyz`, `/metrics`. API-key auth, request IDs, request logging |
+| `internal/api`                | Gin routes: `/webhook`, `/v1/messages`, `/v1/media`, `/v1/events`, `/healthz`, `/readyz`, `/metrics`. API-key auth, request IDs, request logging |
 | `internal/meta`               | Verifies Meta's handshake and `X-Hub-Signature-256`, parses payloads into neutral events, and is the Graph API client that sends messages and classifies Meta errors |
-| `internal/core`               | Wraps inbound events in envelopes, assigns IDs and topics, calls the store, reports queued versus duplicate. Validates outbound messages and sends them through the `Messenger` interface |
-| `internal/store`              | The `Store` interface and its data types                                                            |
+| `internal/core`               | Wraps inbound events in envelopes, assigns IDs and topics, calls the store, reports queued versus duplicate. Validates outbound messages and sends them through the `Messenger` interface. Moves media and lists and replays failed events |
+| `internal/store`              | The `Store`, `IdempotencyStore`, and `FailedEventStore` interfaces and their data types             |
 | `internal/store/sqlite`       | SQLite implementation: transactions, dedup, outbox queries, stats, migrations                       |
 | `internal/transport`          | The `Transport` interface                                                                           |
 | `internal/transport/webhook`  | Delivers an event as a signed HTTP POST to your endpoint                                            |
@@ -269,7 +269,8 @@ sequenceDiagram
 | Memory                  | Constant. Bytes are copied from Meta to the caller in small chunks, nothing is buffered whole      |
 | Upload                  | The caller's multipart body is re-encoded on the fly into Meta's multipart request through a pipe  |
 | Deadlines               | The server's 30 second read and write deadlines are lifted to 6 minutes for the two media routes   |
-| Size limit              | 100 MB, enforced while streaming. Meta enforces the stricter per-type limits                       |
+| Size limit              | Per MIME type (image 5 MB, audio and video 16 MB, sticker 500 KB, other 100 MB), enforced while streaming so an oversized file is cut off early |
+| Delete                  | `DELETE /v1/media/{id}` is forwarded to Meta and returns `204`. Nothing local changes             |
 | Caller disconnects      | The request context is cancelled, which stops the transfer on both sides                          |
 | A failing source        | If the caller's upload breaks, the error is attributed to the caller (400 or 413), not to Meta     |
 | Interrupted download    | The status is already sent, so Zephyr logs `media stream interrupted`. The declared `Content-Length` lets the client detect the short body |
@@ -311,10 +312,15 @@ stateDiagram-v2
     pending --> [*]: delivered (row deleted)
     pending --> pending: delivery failed, rescheduled
     pending --> failed: attempts exhausted
+    failed --> pending: replayed through the API
     failed --> [*]: removed by janitor after retention
 ```
 
 Retry delay doubles each attempt from `RETRY_BASE_DELAY`, capped at 10 minutes, with jitter that keeps each delay between half and the full computed value. With the defaults (2 s base, 8 attempts) the seven waits between attempts add up to between about 2 and 4 minutes before the event is marked failed. Raise `RETRY_MAX_ATTEMPTS` or `RETRY_BASE_DELAY` to tolerate longer outages.
+
+### Replaying failed events
+
+`GET /v1/events/failed` reads the failed rows, newest failure first, and `POST /v1/events/{id}/replay` sets one back to pending with zero attempts in a single conditional update (`WHERE state = 'failed'`). The worker picks it up on its next poll, so the API never delivers anything itself. The update makes a replay safe under concurrency: of two simultaneous calls for the same event exactly one succeeds and the other gets `404 event_not_found`. A replay also restarts the retention clock, because retention counts from the last state change. The event keeps its ID, so your service sees the same `X-Gateway-Delivery` value again. These routes need only `API_KEYS`, not the Meta sending settings.
 
 ## Data model
 

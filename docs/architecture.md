@@ -4,7 +4,7 @@ This document describes how Zephyr is built today: receiving WhatsApp events (re
 
 ## What it does
 
-Zephyr receives webhooks from Meta's WhatsApp Cloud API, proves they are genuine, saves them durably, and forwards them to your own HTTP endpoint with retries. In the other direction, your service calls `POST /v1/messages` and Zephyr validates the message, sends it to Meta, and returns the result. It contains no bot logic and does not interpret message content.
+Zephyr receives webhooks from Meta's WhatsApp Cloud API, proves they are genuine, saves them durably, and forwards them to your own HTTP endpoint with retries. In the other direction, your service calls `POST /v1/messages` and Zephyr validates the message, checks the 24-hour window and the rate limit, sends it to Meta, and returns the result. It can also queue the message for background delivery with retries, and with NATS it can read send requests from a topic. It contains no bot logic and does not interpret message content.
 
 ## System context
 
@@ -109,8 +109,9 @@ Rules enforced by convention (see `AGENT.md`):
 | `internal/store/sqlite`       | SQLite implementation: transactions, dedup, outbox queries, stats, migrations                       |
 | `internal/transport`          | The `Transport` interface                                                                           |
 | `internal/transport/webhook`  | Delivers an event as a signed HTTP POST to your endpoint                                            |
-| `internal/outbox`             | Polls for due events, delivers them, retries with backoff, marks exhausted events failed            |
-| `internal/janitor`            | Periodically deletes expired dedup keys and old failed events                                       |
+| `internal/outbox`             | Polls for due events, delivers them, retries with backoff, marks exhausted events failed. The send worker polls for queued messages and hands each to `core` |
+| `internal/transport/nats`     | Publishes events to NATS JetStream and consumes `wa.outbound`                                      |
+| `internal/janitor`            | Runs cleanup tasks: expired dedup and idempotency keys, old failed events, old sessions, finished send jobs |
 | `internal/crypto`             | HMAC-SHA256 signing and constant-time verification                                                  |
 | `internal/telemetry`          | Prometheus metrics and the outbox-depth collector                                                   |
 | `migrations`                  | Embedded SQL migrations applied at startup                                                          |
@@ -123,7 +124,9 @@ One process runs three long-lived activities, all stopped together on shutdown.
 | --------------- | --------------------------------------------------------------- | ---------------------------- |
 | HTTP server     | Serves Meta's webhooks and the health and metrics endpoints     | On demand                    |
 | Outbox worker   | Delivers queued events to `WEBHOOK_URL`                         | Polls every 500 ms, batch 50 |
-| Janitor         | Deletes expired dedup and idempotency keys and failed events past retention | Every 1 minute |
+| Send worker     | Sends queued messages to Meta and records the outcome          | Polls every 500 ms, batch 50 |
+| NATS consumer   | With `TRANSPORT=nats`, reads send requests from `wa.outbound`   | As messages arrive           |
+| Janitor         | Deletes expired dedup and idempotency keys, failed events past retention, old sessions and finished send jobs | Every 1 minute |
 
 The worker handles one event at a time. SQLite is opened with a single connection, so all database access is serialized and there is no write contention between the API and the worker.
 
@@ -237,6 +240,70 @@ stateDiagram-v2
 
 Meta error handling follows Meta's own guidance to branch on the error `code` and not on subcodes or HTTP status. The classification is a table in `internal/meta/errors.go` and it is the single place to add a code. Codes that Meta does not list fall back to the HTTP status: `429` is rate limited, `5xx` is unavailable, `401` and `403` are authentication failures, anything else is a rejection. A response with no error object, such as a proxy's HTML page, is classified by status alone.
 
+## Customer window
+
+Zephyr records when each customer last wrote to you so it can refuse a free-form send that Meta would reject anyway. When an inbound `message.inbound` event is saved, the same transaction upserts a row in `sessions`, keyed by an HMAC of the phone number and the business number, keeping the latest message time. Status updates do not open a window, and a duplicate delivery from Meta does not touch the row.
+
+```mermaid
+flowchart TD
+    A["Send a non-template message"] --> B["Claim idempotency key"]
+    B --> C{"Session for this customer?"}
+    C -->|"none"| D["unknown: pass to Meta"]
+    C -->|"last message under 24h ago"| E["open: pass to Meta"]
+    C -->|"last message 24h or more ago"| F["closed: release key, return window_closed"]
+    D --> G["Rate limit, then call Meta"]
+    E --> G
+```
+
+Templates skip the check. Rows are kept for 7 days, not the 24 hours the window needs, because with only 24 hours of history an expired row would vanish and look `unknown`, and the check would almost never refuse anything. A closed window is checked after the idempotency claim so a replay still returns the stored result, and the claim is released on refusal because failures are never stored.
+
+## Rate limiting
+
+A token bucket per WhatsApp number, holding `RATE_LIMIT_MPS` tokens that refill at that rate (80 per second by default). A send reserves a token. If the token is available within 2 seconds the send waits for it, otherwise the reservation is cancelled, so a refused call does not use up capacity, and the caller gets a retryable `429 rate_limited`. The buckets live in memory and are per process, which matches the single-instance design.
+
+## Async and broker sends
+
+```mermaid
+sequenceDiagram
+    participant U as Your service
+    participant A as API or NATS consumer
+    participant D as SQLite
+    participant W as Send worker
+    participant M as Meta
+    participant O as Outbox worker
+
+    U->>A: POST /v1/messages?async=true (or publish to wa.outbound)
+    A->>A: Validate
+    A->>D: Insert send job (queued)
+    A-->>U: 202 {id} (or ack the broker message)
+    loop every 500 ms
+        W->>D: Due jobs
+        W->>M: Send (idempotency key, window check, rate limit)
+        alt sent
+            W->>D: Job sent + result event, one transaction
+        else retryable and attempts left
+            W->>D: Reschedule with backoff
+        else permanent or out of attempts
+            W->>D: Job failed + result event, one transaction
+        end
+    end
+    O->>U: message.result event (webhook or wa.results)
+```
+
+A job's outcome and its `message.result` event are written in one transaction, so a result can never be recorded without being announced, or announced without being recorded. The job keeps the message body only until the outcome is known. Every queued message has an idempotency key (the caller's, or a generated one), so a worker crash after Meta accepted a message and before the outcome was stored re-runs the job, finds the key completed, and records the original `wamid` without sending again. The outbox table is not reused for sends, because event delivery and message sending have different retry decisions and different results to record.
+
+## Broker transport (NATS)
+
+With `TRANSPORT=nats` the outbox worker publishes each event with `Transport.Publish` to a JetStream subject equal to its topic, using the event ID as the message ID so JetStream drops a re-publish within its duplicate window. The outbox still owns retries for publishing. In the other direction the consumer reads `wa.outbound` with a durable explicit-ack consumer and does only one thing: validate the request and put it on the send queue, then acknowledge. Everything after that is the async path above, which means a broker request and an async REST request behave identically.
+
+| Situation                                   | Behavior                                                                  |
+| ------------------------------------------- | ------------------------------------------------------------------------- |
+| Request is valid                            | Queued and acknowledged                                                   |
+| Request is malformed or fails validation    | A failed `message.result` is written, and the message is acknowledged so it is not redelivered |
+| Zephyr cannot store the request             | Not acknowledged. Redelivered after 5 seconds, up to 10 times             |
+| Broker redelivers an acknowledged message   | The idempotency key (the request's own, or one derived from the stream sequence) stops a second send |
+| Broker is unreachable at startup            | Zephyr exits with an error. Docker restarts it                            |
+
 ## Media path
 
 Media is streamed through Zephyr and never stored. There is no S3 dependency and nothing to clean up.
@@ -339,6 +406,25 @@ erDiagram
         text dedup_key PK
         integer expires_at
     }
+    SESSIONS {
+        text phone_hash PK
+        text phone_number_id PK
+        integer last_inbound_at
+    }
+    SEND_JOBS {
+        text id PK
+        text state
+        blob payload
+        integer attempts
+        integer next_attempt_at
+        text message_id
+        text error_code
+        text error_message
+        integer is_retryable
+        integer meta_code
+        integer created_at
+        integer updated_at
+    }
     OUTBOX_ENTRIES {
         text id PK
         text topic
@@ -353,7 +439,7 @@ erDiagram
     }
 ```
 
-The tables are not related by a foreign key. `dedup_keys` remembers which Meta messages have been seen. `idempotency_keys` remembers successful sends by caller key. `outbox_entries` holds events waiting for delivery and, for a retention period, events that failed.
+The tables are not related by a foreign key. `dedup_keys` remembers which Meta messages have been seen. `idempotency_keys` remembers successful sends by caller key. `outbox_entries` holds events waiting for delivery and, for a retention period, events that failed. `sessions` remembers when each customer last wrote, as a hash of their number, for 7 days. `send_jobs` holds queued messages with their message body, which is erased when the outcome is recorded, and then keeps only the status for `IDEMPOTENCY_TTL`.
 
 | Dedup key                 | Meaning                                              |
 | ------------------------- | ---------------------------------------------------- |

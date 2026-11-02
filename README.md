@@ -38,7 +38,8 @@ curl localhost:8080/healthz
 2. Set `META_APP_SECRET` to the app secret so Zephyr can verify `X-Hub-Signature-256`.
 3. Subscribe the app to the `messages` webhook field.
 4. Set `WEBHOOK_URL` to your service. Zephyr forwards each inbound message and status update there as a signed POST. See [docs/events.md](docs/events.md).
-5. To send messages and move media, set `WA_PHONE_NUMBER_ID`, `WA_ACCESS_TOKEN`, and `API_KEYS`, then call `POST /v1/messages` or the `/v1/media` routes. See [docs/api.md](docs/api.md).
+5. To send messages and move media, set `WA_PHONE_NUMBER_ID`, `WA_ACCESS_TOKEN`, and `API_KEYS`, then call `POST /v1/messages` (add `?async=true` to queue it) or the `/v1/media` routes. See [docs/api.md](docs/api.md).
+6. To use NATS instead of webhooks, set `TRANSPORT=nats` and `NATS_URL`, and run `make up-nats` for a local broker. Zephyr then publishes events and reads send requests on NATS subjects. See [docs/events.md](docs/events.md#nats-topics).
 
 Run `make help` for all targets.
 
@@ -59,10 +60,12 @@ make down
 | `DB_URL`                 | `sqlite:///data/gateway.db` | SQLite database location                           |
 | `META_APP_SECRET`        | required                    | Verifies Meta webhook signatures                   |
 | `META_VERIFY_TOKEN`      | required                    | Answers Meta's webhook verification handshake      |
-| `TRANSPORT`              | `http`                      | Delivery transport, only `http` is available       |
+| `PHONE_HASH_KEY`         | required                    | At least 32 characters. Hashes customer phone numbers for the 24-hour window |
+| `TRANSPORT`              | `http`                      | Delivery transport: `http` or `nats`               |
 | `TRANSPORT_TOPIC_PREFIX` | `wa`                        | Topic prefix                                       |
-| `WEBHOOK_URL`            | required                    | Your service endpoint that receives events         |
-| `WEBHOOK_SIGNING_SECRET` | required                    | Signs the webhooks Zephyr sends to `WEBHOOK_URL`   |
+| `WEBHOOK_URL`            | required for `http`         | Your service endpoint that receives events         |
+| `WEBHOOK_SIGNING_SECRET` | required for `http`         | Signs the webhooks Zephyr sends to `WEBHOOK_URL`   |
+| `NATS_URL`               | required for `nats`         | `nats://` or `tls://` URL of a JetStream server    |
 | `RETRY_MAX_ATTEMPTS`     | `8`                         | Delivery attempts before an event is marked failed |
 | `RETRY_BASE_DELAY`       | `2s`                        | Exponential backoff base, with jitter              |
 | `DEDUP_TTL`              | `48h`                       | How long seen message IDs are remembered           |
@@ -71,7 +74,8 @@ make down
 | `WA_PHONE_NUMBER_ID`     | empty                       | Your WhatsApp phone number ID. Enables sending     |
 | `WA_ACCESS_TOKEN`        | empty                       | Meta access token. Set together with the number ID |
 | `API_KEYS`               | empty                       | Keys for `/v1`. Required for sending, and enables failed-event replay |
-| `IDEMPOTENCY_TTL`        | `24h`                       | How long a successful send is remembered per key   |
+| `IDEMPOTENCY_TTL`        | `24h`                       | How long a successful send is remembered per key, and how long a queued message's status is kept |
+| `RATE_LIMIT_MPS`         | `80`                        | Sends per second per WhatsApp number               |
 
 ## Security notes
 

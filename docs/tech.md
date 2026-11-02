@@ -41,10 +41,12 @@ Values come from environment variables. A `.env` file is loaded by `make` and by
 | `DB_URL`                 | `sqlite:///data/gateway.db` | Must start with `sqlite://`. Parent directories are created |
 | `META_APP_SECRET`        | required                    | From Meta app settings                                    |
 | `META_VERIFY_TOKEN`      | required                    | At least 16 characters                                    |
-| `TRANSPORT`              | `http`                      | Only `http` is supported                                  |
+| `PHONE_HASH_KEY`         | required                    | At least 32 characters. Keys the hash that stores customer phone numbers for the 24-hour window. Changing it forgets every session |
+| `TRANSPORT`              | `http`                      | `http` (signed webhooks) or `nats` (JetStream)            |
 | `TRANSPORT_TOPIC_PREFIX` | `wa`                        | Not empty                                                 |
-| `WEBHOOK_URL`            | required                    | `http` or `https` URL                                     |
-| `WEBHOOK_SIGNING_SECRET` | required                    | At least 16 characters                                    |
+| `WEBHOOK_URL`            | required for `http`         | `http` or `https` URL                                     |
+| `WEBHOOK_SIGNING_SECRET` | required for `http`         | At least 16 characters                                    |
+| `NATS_URL`               | required for `nats`         | `nats://` or `tls://` URL of a JetStream-enabled server   |
 | `RETRY_MAX_ATTEMPTS`     | `8`                         | At least 1. Total attempts, including the first           |
 | `RETRY_BASE_DELAY`       | `2s`                        | Greater than zero. Go duration syntax                     |
 | `DEDUP_TTL`              | `48h`                       | Greater than zero                                         |
@@ -53,7 +55,8 @@ Values come from environment variables. A `.env` file is loaded by `make` and by
 | `WA_PHONE_NUMBER_ID`     | empty                       | Your WhatsApp phone number ID. Enables sending            |
 | `WA_ACCESS_TOKEN`        | empty                       | Meta access token. Must be set together with the number ID |
 | `API_KEYS`               | empty                       | Comma-separated keys for `/v1`. Required when sending is on, and also turns on the failed-event routes. Each at least 32 characters |
-| `IDEMPOTENCY_TTL`        | `24h`                       | Greater than zero. How long a successful send is remembered per `Idempotency-Key` |
+| `IDEMPOTENCY_TTL`        | `24h`                       | Greater than zero. How long a successful send is remembered per `Idempotency-Key`, and how long the status of a queued message is kept |
+| `RATE_LIMIT_MPS`         | `80`                        | At least 1. Sends per second per WhatsApp number          |
 
 Sending is on only when `WA_PHONE_NUMBER_ID` and `WA_ACCESS_TOKEN` are both set. Setting just one is a startup error, and so is enabling sending without `API_KEYS`. These replace the `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_ACCESS_TOKEN`, and `WHATSAPP_API_VERSION` names used by the old NestJS gateway. Zephyr ignores the old names.
 
@@ -70,6 +73,11 @@ Sending is on only when `WA_PHONE_NUMBER_ID` and `WA_ACCESS_TOKEN` are both set.
 | GET    | `/metrics` | none                          | Prometheus metrics                | `200`                                         |
 | POST   | `/v1/messages` | `Authorization: Bearer <api key>` | Send a WhatsApp message (only when sending is enabled) | `200`, `400`, `401`, `413`, `422`, `429`, `500`, `502`, `504` |
 | POST   | `/v1/media`    | `Authorization: Bearer <api key>` | Stream a file to Meta and return its media ID (only when sending is enabled) | `201`, `400`, `401`, `413`, `422`, `429`, `500`, `502`, `504` |
+| GET    | `/v1/messages/{id}` | `Authorization: Bearer <api key>` | Status of a queued message (only when sending is enabled) | `200`, `400`, `401`, `404`, `500` |
+| GET    | `/v1/sessions/{phone}` | `Authorization: Bearer <api key>` | Whether the customer's 24-hour window is open (only when sending is enabled) | `200`, `400`, `401`, `500` |
+| GET    | `/v1/events/failed` | `Authorization: Bearer <api key>` | List events that could not be delivered (needs `API_KEYS`) | `200`, `400`, `401`, `500` |
+| POST   | `/v1/events/{id}/replay` | `Authorization: Bearer <api key>` | Queue a failed event for delivery again (needs `API_KEYS`) | `202`, `400`, `401`, `404`, `500` |
+| DELETE | `/v1/media/{id}` | `Authorization: Bearer <api key>` | Delete media at Meta (only when sending is enabled) | `204`, `400`, `401`, `404`, `502`, `504` |
 | GET    | `/v1/media/{id}` | `Authorization: Bearer <api key>` | Stream inbound or uploaded media from Meta (only when sending is enabled) | `200`, `400`, `401`, `404`, `429`, `500`, `502`, `504` |
 
 The sending endpoint is documented in [api.md](api.md). Every response carries an `X-Request-Id` header. Do not expose `/metrics`, `/healthz`, or `/readyz` publicly. Route only `/webhook` through your reverse proxy.
@@ -80,7 +88,7 @@ Each event is a `POST` with `Content-Type: application/json` and these headers.
 
 | Header                | Value                                      |
 | --------------------- | ------------------------------------------ |
-| `X-Gateway-Event`     | `message.inbound` or `message.status`      |
+| `X-Gateway-Event`     | `message.inbound`, `message.status`, or `message.result` |
 | `X-Gateway-Delivery`  | Event ID, for example `evt_0b4b...`        |
 | `X-Gateway-Timestamp` | Unix seconds when this attempt was sent    |
 | `X-Gateway-Signature` | `sha256=` and the hex HMAC                 |
@@ -89,12 +97,14 @@ The signature is `HMAC-SHA256(WEBHOOK_SIGNING_SECRET, timestamp + "." + raw_body
 
 ## Event topics
 
-Topics are the outbox routing names and are prepared for future broker transports. With the `http` transport they are not visible to your service.
+Topics are the outbox routing names. With the `http` transport they are not visible to your service. With `nats` they are the JetStream subjects.
 
 | Topic (default prefix) | Event type        |
 | ---------------------- | ----------------- |
 | `wa.inbound`           | `message.inbound` |
 | `wa.status`            | `message.status`  |
+| `wa.results`           | `message.result`  |
+| `wa.outbound`          | Send requests from your service (NATS only) |
 
 ## Database
 

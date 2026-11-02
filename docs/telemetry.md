@@ -63,6 +63,13 @@ Logs are JSON, one object per line, written to stdout. Set the level with `LOG_L
 | `media uploaded`                        | info  | A file was streamed to Meta. Has `media_id`, `mime_type`, `bytes`, duration |
 | `media downloaded`                      | info  | A file was streamed to your service. Has `media_id`, `mime_type`, `bytes`, duration |
 | `media deleted`                         | info  | A file was removed at Meta. Has `media_id` and duration |
+| `message queued`                        | info  | An async send was accepted. Has `message_id`, type, masked number, `correlation_id` |
+| `queued message sent`                   | info  | The send worker delivered a queued message. Has `message_id`, `wamid`, `attempts` |
+| `queued message will be retried`        | warn  | A queued message failed with a retryable error. Has `code`, `attempts`, `retry_in_ms` |
+| `queued message failed`                 | warn  | A queued message failed for good. Has `message_id`, `code`, `attempts` |
+| `broker message queued`                 | info  | A `wa.outbound` request was accepted                         |
+| `broker message rejected`               | warn  | A `wa.outbound` request was malformed or invalid, and a failed result was written |
+| `broker message could not be queued, retrying` | error | The request could not be stored. It is redelivered after 5 seconds |
 | `failed event queued for replay`        | info  | A failed event went back to the delivery queue. Has `event_id` |
 | `failed event request rejected`         | warn  | A list or replay call was refused, for example an unknown event ID |
 | `media request rejected`                | warn  | The upload was malformed, for example not multipart or missing a file part |
@@ -120,6 +127,8 @@ Prometheus text format at `GET /metrics`. Go runtime and process metrics are inc
 | `zephyr_media_requests_total`                  | counter   | `operation`, `result` | Media requests by `upload`, `download`, or `delete` and result (`ok`, `interrupted`, or an error code) |
 | `zephyr_media_duration_seconds`                | histogram | `operation`           | Time to complete a transfer                               |
 | `zephyr_media_bytes_total`                     | counter   | `operation`           | Bytes streamed in each direction                          |
+| `zephyr_async_sends_total`                     | counter   | `result`              | Attempts to send queued messages (`sent`, `retry`, `failed`) |
+| `zephyr_outbound_consumed_total`               | counter   | `result`              | Send requests read from the broker (`queued`, `rejected`, `retry`) |
 | `zephyr_event_replays_total`                   | counter   | `result`              | Replay requests by result (`queued`, `event_not_found`, or another error code) |
 | `zephyr_http_requests_total`                   | counter   | `method`, `route`, `status` | Request counts                                      |
 | `zephyr_http_request_duration_seconds`         | histogram | `method`, `route`     | Request latency                                           |
@@ -169,6 +178,8 @@ sum by (result) (rate(zephyr_send_requests_total{result!="sent"}[5m]))
 | Signature rejections       | `rate(zephyr_webhook_requests_total{result="invalid_signature"}[5m]) > 0` | Wrong app secret, or someone is probing the endpoint |
 | Not scraping               | `zephyr_outbox_stats_error == 1`                                  | The store cannot be read                                 |
 | Token problem              | `increase(zephyr_send_requests_total{result="upstream_auth_failed"}[10m]) > 0` | The Meta access token expired or lost permission |
+| Queued sends failing       | `increase(zephyr_async_sends_total{result="failed"}[15m]) > 0` | Queued messages are failing for good. Check the `message.result` events or the logs |
+| Broker requests retrying   | `increase(zephyr_outbound_consumed_total{result="retry"}[10m]) > 0` | Zephyr cannot store `wa.outbound` requests, usually a disk problem |
 | Broken downloads           | `increase(zephyr_media_requests_total{result="interrupted"}[15m]) > 0` | Media downloads are dropping midway |
 | Sends failing              | `sum(rate(zephyr_send_requests_total{result=~"upstream_.*|rate_limited"}[5m])) > 0` | Meta is rejecting, throttling, or unreachable |
 

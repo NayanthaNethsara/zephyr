@@ -6,11 +6,10 @@ This page lists what Zephyr 0.1 does not do and the behaviors to plan around. It
 
 | Gap                                   | Impact                                                                        | Status                  |
 | ------------------------------------- | ----------------------------------------------------------------------------- | ----------------------- |
-| Only the `http` transport             | No NATS, Redis, RabbitMQ, or Kafka delivery                                    | Planned                 |
+| Only the `http` and `nats` transports | No Redis, RabbitMQ, or Kafka delivery                                          | Planned                 |
 | SQLite only                           | No PostgreSQL support                                                          | Planned                 |
 | One WhatsApp number per deployment    | Webhooks for other numbers are forwarded but sending uses the one configured number | Planned            |
-| No 24-hour session tracking           | Free-form sends outside the window are rejected by Meta, not pre-checked       | Planned                 |
-| No rate limiting                      | Neither inbound requests nor sends are throttled by Zephyr. Meta throttles sends (`rate_limited`) | Planned |
+| Limited rate limiting                 | Only sends are throttled, per number and per process. Inbound requests are not  | Planned                 |
 | No media storage                      | Media streams through Zephyr and is never kept. Your service must store files it wants to keep | By design, optional storage may come later |
 | No dashboard                          | Everything is logs and metrics                                                 | Later                   |
 
@@ -18,18 +17,42 @@ This page lists what Zephyr 0.1 does not do and the behaviors to plan around. It
 
 | Behavior                                    | Detail and workaround                                                                                         |
 | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| Sends are synchronous                       | The call blocks until Meta answers, up to 15 seconds. Set a client timeout above that                          |
-| Zephyr does not retry or queue sends        | A failure is returned to you with `retryable`. Your service owns retries                                       |
+| Sends wait by default                       | The call blocks until Meta answers, up to 15 seconds. Set a client timeout above that, or use `?async=true`    |
+| Synchronous sends are not retried           | A failure is returned to you with `retryable`. Your service owns retries. Queued sends (`?async=true` or the broker) are retried by Zephyr |
 | A timeout can hide a successful send        | On `upstream_timeout` or a dropped connection the message may have been accepted. Send an `Idempotency-Key` so a retry is safe, and treat the `message.status` events as the source of truth |
 | Idempotency is opt-in                       | Without the `Idempotency-Key` header every call sends, and blind retries can duplicate                         |
 | Idempotency has two narrow gaps             | A crash between Meta accepting a message and Zephyr recording it, and a database failure while recording. Both can allow one duplicate on retry. The second is logged as an error |
 | Only successful sends are remembered        | A failed send releases its key so the retry runs again. A key is kept for `IDEMPOTENCY_TTL` (24 hours by default) |
 | Individual recipients only                  | Group messages, replies with `context`, read receipts, and typing indicators are not exposed                   |
-| The 24-hour window is not pre-checked       | Meta rejects the send and Zephyr returns `window_closed`. Use a template to reach customers outside the window |
+| The window check is best effort             | Zephyr refuses only when it knows the window expired. A customer it has no record of (`unknown`) is passed to Meta, which decides. Use a template to reach customers outside the window |
 | Only required fields are validated          | Everything else is passed to Meta as is, so new Meta features work, and Meta's rejection comes back as a code  |
 | Error codes follow Meta's published table   | Code `131030` (recipient not allowed on a test number) is not in that table but is handled. Unlisted codes fall back to the HTTP status |
 | API keys are static                         | They live in `API_KEYS`. Rotating or revoking a key means a restart. There are no scopes                       |
 | Sent messages are not stored                | Zephyr logs metadata only (message ID, type, masked number). Delivery results arrive as `message.status` events |
+
+## Queued sends and sessions
+
+| Behavior                                       | Detail and workaround                                                                                         |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| One message at a time                          | The send worker sends queued messages one after another, so a slow Meta response delays the ones behind it     |
+| Statuses expire                                | A queued message's status is kept for `IDEMPOTENCY_TTL`. After that `GET /v1/messages/{id}` returns `404`. Store the `message.result` event if you need a longer record |
+| Retries stop after `RETRY_MAX_ATTEMPTS`        | The message then fails with the last error and a failed `message.result` is sent. Resend it yourself          |
+| Sessions are learned from Zephyr's own inbound | A customer who wrote before Zephyr was installed is `unknown` until they write again                           |
+| Changing `PHONE_HASH_KEY` forgets sessions     | Every customer becomes `unknown` until they write again. Nothing is blocked while they are unknown            |
+| The rate limit is per process                  | Running two Zephyr processes against different databases doubles the allowed rate. Only one instance is supported anyway |
+| Rate limit waits are capped at 2 seconds       | A synchronous call that would wait longer returns `429`. Queued messages are retried with backoff             |
+
+## NATS
+
+| Behavior                                       | Detail and workaround                                                                                         |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| No `wa.dlq` subject                            | A request that cannot succeed produces a failed `message.result` on `wa.results`, and events that cannot be published stay in the failed list (`GET /v1/events/failed`) |
+| One subject per topic                          | Events are published to `wa.inbound` and so on without a per-customer subject. Order within a topic is preserved, and there is no partitioning |
+| Stream keeps messages for 7 days               | A consumer that is offline longer than that loses events. The stream is created for you with file storage      |
+| Delivery is at least once                      | Treat the event `id` as an idempotency key. Publishing is deduplicated only within JetStream's short window    |
+| Events are not signed                          | Authentication is whatever your NATS server enforces. Use credentials and TLS (`tls://`)                       |
+| Credentials in the URL only                    | `NATS_URL` can carry a user and password. There are no separate settings for token or key files               |
+| No build tag                                   | The NATS client is always compiled in, which adds under 1 MB to the binary (about 20.7 MB in total)            |
 
 ## Media
 

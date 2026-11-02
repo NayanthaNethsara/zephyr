@@ -309,6 +309,7 @@ HTTP delivery headers:
 - `type` mirrors Meta types: `text`, `image`, `video`, `audio`, `document`, `sticker`, `location`, `contacts`, `interactive`, `template`, `reaction`.
 - The body for each type follows Meta's shape; the gateway validates required fields and passes it through.
 - `phone_number_id` optional when only one number is configured.
+- Implementation note (v0.1): sessions are kept 7 days and an unknown customer is passed to Meta, so the `window_closed` pre-check only fires when the window is known to have expired. Async sends use their own `send_jobs` table and worker instead of an outbox `kind`, results are `message.result` events on `wa.results`, and there is no `wa.dlq` or per-key subject. See [limitations.md](limitations.md).
 - Implementation note: the REST API takes the idempotency key from the `Idempotency-Key` header only, claims it before sending (so concurrent duplicates cannot both send), rejects the same key with a different message, and stores only successful sends. See [api.md](api.md) and [architecture.md](architecture.md).
 
 ### 6.3 Error object

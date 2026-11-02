@@ -1,6 +1,6 @@
 # Sending API
 
-Zephyr sends WhatsApp messages through `POST /v1/messages` and moves media files with `POST /v1/media`, `GET /v1/media/{id}` and `DELETE /v1/media/{id}` (see [Media](#media)). It also lists failed deliveries and replays them (see [Failed events](#failed-events)). The call waits for Meta's answer and returns the WhatsApp message ID (`wamid`) or a structured error. Sending is optional and turns on only when `WA_PHONE_NUMBER_ID`, `WA_ACCESS_TOKEN`, and `API_KEYS` are configured. Without them the send and media routes do not exist and Zephyr stays receive-only. The failed-event routes need only `API_KEYS`, so a receive-only deployment can still inspect and replay failed deliveries.
+Zephyr sends WhatsApp messages through `POST /v1/messages` and moves media files with `POST /v1/media`, `GET /v1/media/{id}` and `DELETE /v1/media/{id}` (see [Media](#media)). It also lists failed deliveries and replays them (see [Failed events](#failed-events)). By default the call waits for Meta's answer and returns the WhatsApp message ID (`wamid`) or a structured error. Add `?async=true` to queue the message instead and let Zephyr deliver and retry it (see [Async sending](#async-sending)). `GET /v1/sessions/{phone}` tells you whether the 24-hour window is open (see [Customer window](#customer-window)), and a NATS deployment can send by publishing to a topic (see [Broker mode](#broker-mode-nats)). Sending is optional and turns on only when `WA_PHONE_NUMBER_ID`, `WA_ACCESS_TOKEN`, and `API_KEYS` are configured. Without them the send and media routes do not exist and Zephyr stays receive-only. The failed-event routes need only `API_KEYS`, so a receive-only deployment can still inspect and replay failed deliveries.
 
 ## Authentication
 
@@ -67,16 +67,17 @@ Unknown top-level fields are rejected with `400` so a misspelled field is never 
 | `invalid_request`         | 400  | no        | Bad body, unknown field, or a rejected parameter. Fix the request          |
 | `unauthorized`            | 401  | no        | Missing or wrong API key                                                   |
 | `payload_too_large`       | 413  | no        | A message body over 1 MiB, or a media file over the limit for its type     |
-| `window_closed`           | 422  | no        | The 24-hour customer service window is closed. Send a template message     |
+| `window_closed`           | 422  | no        | The 24-hour customer service window is closed, as known to Zephyr or reported by Meta. Send a template message |
 | `recipient_undeliverable` | 422  | no        | Not a WhatsApp number, recipient blocked or opted out, or held for ecosystem health |
 | `recipient_not_allowed`   | 422  | no        | Test numbers can only message recipients added in the Meta dashboard       |
 | `template_error`          | 422  | no        | Template missing, not approved, wrong parameters, or paused                |
 | `invalid_media`           | 422  | no        | Meta could not use the media you referenced                                |
 | `sending_restricted`      | 422  | no        | Quality, policy, or account restriction on the sending number              |
 | `rejected`                | 422  | no        | Meta refused the message with a code Zephyr does not classify              |
-| `rate_limited`            | 429  | yes       | Meta throughput or pair limit. Wait and retry                              |
+| `rate_limited`            | 429  | yes       | Zephyr's per-number limit (`RATE_LIMIT_MPS`) or Meta's throughput or pair limit. Wait and retry |
 | `request_in_progress`     | 409  | yes       | Another request with the same `Idempotency-Key` is still running. Wait a moment and retry with the same key |
 | `idempotency_key_reused`  | 422  | no        | The key was already used with a different message. Use a new key for a new message |
+| `message_not_found`       | 404  | no        | No queued message has this ID, or its status was removed after `IDEMPOTENCY_TTL` |
 | `media_not_found`         | 404  | no        | Meta no longer has this media. Inbound media IDs expire after 7 days, uploaded ones after 30 |
 | `upstream_auth_failed`    | 502  | no        | The configured access token is invalid, expired, or lacks permission. Fix `WA_ACCESS_TOKEN` |
 | `sender_misconfigured`    | 502  | no        | The WhatsApp number or billing is not ready. Fix it in the Meta dashboard  |
@@ -84,7 +85,7 @@ Unknown top-level fields are rejected with `400` so a misspelled field is never 
 | `upstream_timeout`        | 504  | yes       | Meta did not answer within 15 seconds. The message may or may not have been sent |
 | `internal_error`          | 500  | no        | Unexpected gateway error. Details are in the logs, not the response        |
 
-Zephyr does not retry sends. When `retryable` is true, your service decides whether to retry, and an `Idempotency-Key` makes that safe.
+A synchronous send is never retried by Zephyr. When `retryable` is true, your service decides whether to retry, and an `Idempotency-Key` makes that safe. A queued send (`?async=true` or from the broker) is retried by Zephyr itself for retryable errors.
 
 ## Idempotency
 
@@ -112,6 +113,88 @@ What counts as the "same message": the recipient, the type, and the type-specifi
 Only successful sends are remembered. A failure releases the key on purpose, so a retry after `window_closed` or `rate_limited` asks Meta again and gets a fresh answer instead of a stale error.
 
 Two narrow cases can still produce a duplicate even with a key: Zephyr crashing in the moment between Meta accepting a message and Zephyr recording it (the reservation expires after 60 seconds and a retry then sends again), and a database failure while recording the key, which Zephyr logs as an error. Both are rare, and the `message.status` events tell you what actually happened.
+
+## Async sending
+
+Add `?async=true` and Zephyr validates the message, stores it, and answers at once. A background worker sends it, retries retryable failures with backoff, and records the outcome.
+
+```sh
+curl -X POST "http://localhost:8080/v1/messages?async=true" \
+  -H "Authorization: Bearer $ZEPHYR_API_KEY" \
+  -H "X-Correlation-Id: order-1234" \
+  -d '{"to":"94770000000","type":"text","text":{"body":"Your order shipped"}}'
+```
+
+```json
+{ "id": "msg_0b4b3a5a4da58182f0cf6274dfa8c527", "status": "queued", "correlation_id": "order-1234" }
+```
+
+The response is `202`. Validation errors (`400`) still come back immediately, so a queued message is always well formed. There are two ways to learn the outcome.
+
+**Poll the status:**
+
+```sh
+curl -H "Authorization: Bearer $ZEPHYR_API_KEY" http://localhost:8080/v1/messages/msg_0b4b3a5a4da58182f0cf6274dfa8c527
+```
+
+```json
+{
+  "id": "msg_0b4b3a5a4da58182f0cf6274dfa8c527",
+  "status": "sent",
+  "wamid": "wamid.HBgL...",
+  "attempts": 1,
+  "created_at": "2026-11-02T10:00:00Z",
+  "updated_at": "2026-11-02T10:00:01Z"
+}
+```
+
+`status` is `queued`, `sent`, or `failed`. A failed message carries an `error` object with the same `code`, `message`, `retryable`, and `meta_code` fields as any error. Statuses are kept for `IDEMPOTENCY_TTL` (24 hours by default) and then return `404 message_not_found`.
+
+**Receive the result:** every finished queued message also produces a `message.result` event at your `WEBHOOK_URL`, so you do not have to poll. See [events.md](events.md#send-results).
+
+Retries run up to `RETRY_MAX_ATTEMPTS` attempts with exponential backoff, and only for errors marked `retryable`. A permanent failure such as `window_closed` fails at once. Every queued message is sent under an idempotency key, either yours from the `Idempotency-Key` header or one Zephyr generates, so a crash or a retry never sends it twice. The message body is deleted from the database as soon as the outcome is recorded. The `X-Correlation-Id` header or `correlation_id` field comes back in the status and in the result event.
+
+## Customer window
+
+WhatsApp allows free-form messages only within 24 hours of the customer's last message. Zephyr records when each customer last wrote to you and checks it before sending any non-template message.
+
+```sh
+curl -H "Authorization: Bearer $ZEPHYR_API_KEY" http://localhost:8080/v1/sessions/94770000000
+```
+
+```json
+{ "status": "open", "last_inbound_at": "2026-11-02T09:30:00Z", "expires_at": "2026-11-03T09:30:00Z" }
+```
+
+| `status`  | Meaning                                                                                           |
+| --------- | ------------------------------------------------------------------------------------------------- |
+| `open`    | The customer wrote within 24 hours. Free-form messages will be accepted                           |
+| `closed`  | Their last message is older than 24 hours. Zephyr rejects free-form sends with `422 window_closed` without calling Meta, and only a template can reach them |
+| `unknown` | Zephyr has no record of this customer. The send is passed to Meta, which decides                  |
+
+`unknown` never blocks a send, so a customer who messaged you before Zephyr was installed, or after the database was reset, is not wrongly refused. Templates skip the check entirely. Records are kept for 7 days, which is how Zephyr can tell `closed` from `unknown` for a week after a conversation went quiet. Phone numbers are stored only as a keyed hash (`PHONE_HASH_KEY`), never in plain text.
+
+## Rate limit
+
+Zephyr limits sends per WhatsApp number to `RATE_LIMIT_MPS` per second (80 by default, Meta's standard throughput) so a burst does not trigger Meta's throttling. A request over the limit waits for its turn, up to 2 seconds. If the wait would be longer, it returns `429 rate_limited` with `retryable: true` and nothing is sent. Queued messages simply wait their turn in the background. The limit is held in memory, so it applies per Zephyr process.
+
+## Broker mode (NATS)
+
+With `TRANSPORT=nats` Zephyr publishes events to NATS JetStream instead of calling `WEBHOOK_URL`, and your service can send messages by publishing instead of calling REST. See [events.md](events.md#nats-topics) for the topics.
+
+Publish a send request to `wa.outbound` (the prefix is `TRANSPORT_TOPIC_PREFIX`). The body is the same JSON as `POST /v1/messages`, plus an optional `idempotency_key`:
+
+```json
+{
+  "correlation_id": "order-1234",
+  "idempotency_key": "order-1234-confirm",
+  "to": "94770000000",
+  "type": "text",
+  "text": { "body": "Your order shipped" }
+}
+```
+
+Zephyr queues the request exactly as an async send and acknowledges the broker message. A malformed request cannot succeed, so it is rejected with a failed `message.result`, not retried. If Zephyr cannot store the request (for example the disk is full), it does not acknowledge, and the broker redelivers after 5 seconds. Without an `idempotency_key`, the broker message's stream sequence is used, so a redelivery cannot send twice. The outcome of every request arrives on `wa.results` as a `message.result` event, matched to your request by `correlation_id`.
 
 ## Examples
 

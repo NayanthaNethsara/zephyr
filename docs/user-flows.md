@@ -311,3 +311,71 @@ flowchart TD
 ```
 
 Uploading once and sending the same ID to many customers is cheaper than uploading for every message. An uploaded ID is valid for 30 days. Sending by `link` skips the upload step, but Meta fetches the file from your URL, so it must be public and reachable over HTTPS.
+
+## Flow 19: Sending without waiting
+
+```mermaid
+sequenceDiagram
+    participant U as Your service
+    participant Z as Zephyr
+    participant M as Meta
+
+    U->>Z: POST /v1/messages?async=true
+    Z-->>U: 202 {id, status: queued}
+    Z->>M: Send (worker, in the background)
+    alt Meta accepts
+        M-->>Z: wamid
+        Z->>U: message.result {status: sent, wamid}
+    else temporary failure
+        Z->>Z: Wait with backoff, try again
+    else permanent failure
+        Z->>U: message.result {status: failed, error}
+    end
+    U->>Z: GET /v1/messages/{id} (optional)
+    Z-->>U: queued, sent, or failed
+```
+
+Use this when your service should not hold a connection open for Meta's answer, or when you want Zephyr to ride out Meta throttling and short outages for you. Validation errors still return `400` at once, so only well-formed messages are queued. Each queued message is sent under an idempotency key, so a restart in the middle never sends it twice.
+
+## Flow 20: Checking the 24-hour window
+
+```mermaid
+flowchart TD
+    A["Customer messages you"] --> B["Zephyr records the time, as a hash of their number"]
+    B --> C["You send a free-form message"]
+    C --> D{"Window state"}
+    D -->|"open: under 24h"| E["Sent to Meta"]
+    D -->|"unknown: never seen"| E
+    D -->|"closed: 24h or more"| F["422 window_closed, nothing sent"]
+    F --> G["Send a template message instead"]
+    G --> H["Customer replies, window reopens"]
+```
+
+Call `GET /v1/sessions/{phone}` first if you want to choose between a free-form message and a template. Templates always skip the check. A customer Zephyr has never heard from is `unknown`, and the send goes to Meta, which decides.
+
+## Flow 21: Hitting the rate limit
+
+Zephyr allows `RATE_LIMIT_MPS` sends per second per number. A short burst is absorbed: each extra send waits a moment for its turn. If the line is more than 2 seconds long, the call returns `429 rate_limited` with `retryable: true` and sends nothing, so retrying later is safe. Queued messages wait in the background and are retried automatically.
+
+## Flow 22: Running on NATS
+
+```mermaid
+sequenceDiagram
+    participant P as Customer
+    participant M as Meta
+    participant Z as Zephyr
+    participant N as NATS JetStream
+    participant U as Your service
+
+    P->>M: Sends a message
+    M->>Z: POST /webhook
+    Z->>N: publish wa.inbound
+    N->>U: delivered to your consumer
+    U->>N: publish wa.outbound (reply request)
+    N->>Z: consumer reads it, Zephyr queues and acknowledges
+    Z->>M: Send
+    Z->>N: publish wa.results (sent or failed)
+    N->>U: delivered to your consumer
+```
+
+You consume `wa.inbound`, `wa.status`, and `wa.results`, and publish replies to `wa.outbound`. Match a result to your request by `correlation_id`. If NATS is down when an event is ready, the event stays in Zephyr's outbox and is published when the broker returns. If Zephyr is down when you publish a request, JetStream keeps it and Zephyr reads it after it restarts.

@@ -23,12 +23,15 @@ Zephyr sits between Meta and your service. It checks that requests really come f
 
 ## 1. Generate secrets
 
-Zephyr needs two secrets you create yourself. Each must be at least 16 characters.
+Zephyr needs three secrets you create yourself. Each must be at least 16 characters, and `PHONE_HASH_KEY` at least 32.
 
 ```sh
 openssl rand -hex 32   # use for META_VERIFY_TOKEN
 openssl rand -hex 32   # use for WEBHOOK_SIGNING_SECRET
+openssl rand -hex 32   # use for PHONE_HASH_KEY
 ```
+
+`PHONE_HASH_KEY` protects customer phone numbers in the database. Zephyr stores only a keyed hash of each number to track the 24-hour window. Keep the key stable: changing it makes Zephyr forget every open window.
 
 ## 2. Collect values from Meta
 
@@ -52,6 +55,7 @@ META_APP_SECRET=<app secret from Meta>
 META_VERIFY_TOKEN=<generated token>
 WEBHOOK_URL=http://localhost:9000/zephyr
 WEBHOOK_SIGNING_SECRET=<generated secret>
+PHONE_HASH_KEY=<generated key>
 ```
 
 Zephyr refuses to start with a clear message if a required value is missing or too short.
@@ -155,6 +159,12 @@ curl -i -X POST http://localhost:8080/v1/messages \
 Add `-H "Idempotency-Key: some-unique-id"` when your service may retry, so a repeat never sends twice. A successful call returns `{"wamid":"..."}`. The message then produces `message.status` events (`sent`, `delivered`, `read`) at your `WEBHOOK_URL`. Every message type and error code is described in [api.md](api.md).
 
 To send a file, upload it first and send the returned ID. Receiving a customer's photo works in reverse: read the media ID from the event and download it from Zephyr. Neither needs any storage on Zephyr's side. See the media section of [api.md](api.md).
+
+To send without waiting, add `?async=true`. Zephyr queues the message, retries it for you, and sends a `message.result` event to your `WEBHOOK_URL` when it is done. `GET /v1/sessions/<phone>` tells you whether a customer's 24-hour window is open.
+
+### Using NATS instead of webhooks
+
+If you already run NATS with JetStream, set `TRANSPORT=nats` and `NATS_URL=nats://nats:4222` and Zephyr publishes events to `wa.inbound`, `wa.status`, and `wa.results`, and reads send requests from `wa.outbound`. `WEBHOOK_URL` and `WEBHOOK_SIGNING_SECRET` are then not needed. To try it locally, `make up-nats` starts Zephyr together with a NATS server on the same Docker network. See [events.md](events.md#nats-topics) and [api.md](api.md#broker-mode-nats).
 
 Common first errors:
 

@@ -26,6 +26,7 @@ type Metrics struct {
 	mediaRequests    *prometheus.CounterVec
 	mediaDuration    *prometheus.HistogramVec
 	mediaBytes       *prometheus.CounterVec
+	eventReplays     *prometheus.CounterVec
 }
 
 func New() *Metrics {
@@ -96,6 +97,11 @@ func New() *Metrics {
 			Name:      "media_bytes_total",
 			Help:      "Bytes streamed through media uploads and downloads.",
 		}, []string{"operation"}),
+		eventReplays: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "event_replays_total",
+			Help:      "Requests to replay a failed event, by result (queued or an error code).",
+		}, []string{"result"}),
 	}
 
 	m.registry.MustRegister(
@@ -113,6 +119,7 @@ func New() *Metrics {
 		m.mediaRequests,
 		m.mediaDuration,
 		m.mediaBytes,
+		m.eventReplays,
 	)
 	return m
 }
@@ -150,6 +157,10 @@ func (m *Metrics) HTTPRequest(method, route string, status int, took time.Durati
 func (m *Metrics) SendResult(messageType, result string, took time.Duration) {
 	m.sendRequests.WithLabelValues(messageType, result).Inc()
 	m.sendDuration.WithLabelValues(messageType).Observe(took.Seconds())
+}
+
+func (m *Metrics) ReplayResult(result string) {
+	m.eventReplays.WithLabelValues(result).Inc()
 }
 
 func (m *Metrics) MediaResult(operation, result string, size int64, took time.Duration) {

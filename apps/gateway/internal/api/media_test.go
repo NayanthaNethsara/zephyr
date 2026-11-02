@@ -43,6 +43,8 @@ type fakeMediaBackend struct {
 	uploadErr    error
 	downloadedID []string
 	download     func() (core.MediaDownload, error)
+	deletedID    []string
+	deleteErr    error
 }
 
 func (f *fakeMediaBackend) UploadMedia(_ context.Context, phoneNumberID string, upload core.MediaUpload) (string, error) {
@@ -59,11 +61,16 @@ func (f *fakeMediaBackend) DownloadMedia(_ context.Context, mediaID string) (cor
 	return f.download()
 }
 
+func (f *fakeMediaBackend) DeleteMedia(_ context.Context, mediaID string) error {
+	f.deletedID = append(f.deletedID, mediaID)
+	return f.deleteErr
+}
+
 func newMediaRouter(backend *fakeMediaBackend, recorder Recorder) http.Handler {
 	return NewRouter(Deps{
 		Ingestor: &fakeIngestor{},
 		Recorder: recorder,
-		Media:    core.NewMediaService(backend, backend, "111"),
+		Media:    core.NewMediaService(backend, backend, backend, "111"),
 		APIKeys:  []string{testAPIKey},
 		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
@@ -121,6 +128,7 @@ func TestMediaRoutesRequireAPIKey(t *testing.T) {
 	}{
 		{name: "upload", method: http.MethodPost, target: "/v1/media"},
 		{name: "download", method: http.MethodGet, target: "/v1/media/123"},
+		{name: "delete", method: http.MethodDelete, target: "/v1/media/123"},
 	}
 	credentials := []struct {
 		name          string
@@ -135,9 +143,11 @@ func TestMediaRoutesRequireAPIKey(t *testing.T) {
 	for _, route := range routes {
 		for _, credential := range credentials {
 			t.Run(route.name+" with "+credential.name, func(t *testing.T) {
-				backend := &fakeMediaBackend{download: func() (core.MediaDownload, error) {
-					return core.MediaDownload{}, &core.RequestError{Code: core.CodeInvalidRequest, Message: "stop"}
-				}}
+				stop := &core.RequestError{Code: core.CodeInvalidRequest, Message: "stop"}
+				backend := &fakeMediaBackend{
+					download:  func() (core.MediaDownload, error) { return core.MediaDownload{}, stop },
+					deleteErr: stop,
+				}
 				request := httptest.NewRequest(route.method, route.target, strings.NewReader("not multipart"))
 				if credential.authorization != "" {
 					request.Header.Set("Authorization", credential.authorization)
@@ -161,6 +171,7 @@ func TestMediaRoutesAreAbsentWithoutAProvider(t *testing.T) {
 	}{
 		{name: "upload", method: http.MethodPost, target: "/v1/media"},
 		{name: "download", method: http.MethodGet, target: "/v1/media/123"},
+		{name: "delete", method: http.MethodDelete, target: "/v1/media/123"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -312,12 +323,9 @@ func (zeroReader) Read(p []byte) (int, error) {
 }
 
 func TestUploadMediaSizeAndTruncation(t *testing.T) {
-	multipartHeader := textproto.MIMEHeader{}
-	multipartHeader.Set("Content-Disposition", `form-data; name="file"; filename="big.bin"`)
-	multipartHeader.Set("Content-Type", "video/mp4")
-
 	tests := []struct {
 		name        string
+		contentType string
 		fileBytes   int64
 		truncateAt  int64
 		wantStatus  int
@@ -325,15 +333,24 @@ func TestUploadMediaSizeAndTruncation(t *testing.T) {
 		wantMedia   string
 		wantUploads int
 	}{
-		{name: "file at the limit is accepted", fileBytes: maxMediaBytes, wantStatus: http.StatusCreated, wantMedia: fmt.Sprintf("upload:ok:%d", maxMediaBytes), wantUploads: 1},
-		{name: "file over the limit is refused", fileBytes: maxMediaBytes + multipartOverhead + 1, wantStatus: http.StatusRequestEntityTooLarge, wantCode: "payload_too_large", wantUploads: 0},
-		{name: "upload cut off midway is a bad request", fileBytes: 5000, truncateAt: 2000, wantStatus: http.StatusBadRequest, wantCode: "invalid_request", wantUploads: 0},
+		{name: "document at the limit is accepted", contentType: "application/pdf", fileBytes: maxMediaBytes, wantStatus: http.StatusCreated, wantMedia: fmt.Sprintf("upload:ok:%d", maxMediaBytes), wantUploads: 1},
+		{name: "document over the request limit is refused", contentType: "application/pdf", fileBytes: maxMediaBytes + multipartOverhead + 1, wantStatus: http.StatusRequestEntityTooLarge, wantCode: "payload_too_large", wantUploads: 0},
+		{name: "document just over the document limit is refused", contentType: "application/pdf", fileBytes: maxMediaBytes + 1, wantStatus: http.StatusRequestEntityTooLarge, wantCode: "payload_too_large", wantMedia: fmt.Sprintf("upload:payload_too_large:%d", maxMediaBytes+1), wantUploads: 0},
+		{name: "video at its limit is accepted", contentType: "video/mp4", fileBytes: 16 << 20, wantStatus: http.StatusCreated, wantMedia: fmt.Sprintf("upload:ok:%d", 16<<20), wantUploads: 1},
+		{name: "video over its limit is refused", contentType: "video/mp4", fileBytes: 16<<20 + 1, wantStatus: http.StatusRequestEntityTooLarge, wantCode: "payload_too_large", wantMedia: fmt.Sprintf("upload:payload_too_large:%d", 16<<20+1), wantUploads: 0},
+		{name: "image over its limit is refused", contentType: "image/png", fileBytes: 5<<20 + 1, wantStatus: http.StatusRequestEntityTooLarge, wantCode: "payload_too_large", wantMedia: fmt.Sprintf("upload:payload_too_large:%d", 5<<20+1), wantUploads: 0},
+		{name: "sticker over its limit is refused", contentType: "image/webp", fileBytes: 500<<10 + 1, wantStatus: http.StatusRequestEntityTooLarge, wantCode: "payload_too_large", wantMedia: fmt.Sprintf("upload:payload_too_large:%d", 500<<10+1), wantUploads: 0},
+		{name: "upload cut off midway is a bad request", contentType: "image/png", fileBytes: 5000, truncateAt: 2000, wantStatus: http.StatusBadRequest, wantCode: "invalid_request", wantUploads: 0},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			backend := &fakeMediaBackend{uploadID: "1"}
 			recorder := &fakeRecorder{}
+
+			multipartHeader := textproto.MIMEHeader{}
+			multipartHeader.Set("Content-Disposition", `form-data; name="file"; filename="big.bin"`)
+			multipartHeader.Set("Content-Type", tt.contentType)
 
 			reader, writer := io.Pipe()
 			form := multipart.NewWriter(writer)
@@ -498,6 +515,61 @@ func TestDownloadMedia(t *testing.T) {
 				if rec.Header().Get("X-Content-Type-Options") != "nosniff" {
 					t.Error("nosniff header missing")
 				}
+			}
+			if len(recorder.media) != 1 || recorder.media[0] != tt.wantMedia {
+				t.Errorf("recorded media = %v, want [%s]", recorder.media, tt.wantMedia)
+			}
+		})
+	}
+}
+
+func TestDeleteMedia(t *testing.T) {
+	tests := []struct {
+		name       string
+		mediaID    string
+		deleteErr  error
+		wantStatus int
+		wantCode   string
+		wantDelete int
+		wantMedia  string
+	}{
+		{name: "deleted", mediaID: "1234567890", wantStatus: http.StatusNoContent, wantDelete: 1, wantMedia: "delete:ok:0"},
+		{
+			name: "media already gone", mediaID: "99", deleteErr: &core.RequestError{Code: core.CodeMediaNotFound, Message: "gone"},
+			wantStatus: http.StatusNotFound, wantCode: "media_not_found", wantDelete: 1, wantMedia: "delete:media_not_found:0",
+		},
+		{
+			name: "token rejected", mediaID: "99", deleteErr: &core.RequestError{Code: core.CodeUpstreamAuthFailed, Message: "x", MetaCode: 190},
+			wantStatus: http.StatusBadGateway, wantCode: "upstream_auth_failed", wantDelete: 1, wantMedia: "delete:upstream_auth_failed:0",
+		},
+		{
+			name: "meta unavailable", mediaID: "99", deleteErr: &core.RequestError{Code: core.CodeUpstreamUnavailable, Message: "x", IsRetryable: true},
+			wantStatus: http.StatusBadGateway, wantCode: "upstream_unavailable", wantDelete: 1, wantMedia: "delete:upstream_unavailable:0",
+		},
+		{name: "invalid media id never reaches Meta", mediaID: "bad.id", wantStatus: http.StatusBadRequest, wantCode: "invalid_request", wantDelete: 0, wantMedia: "delete:invalid_request:0"},
+		{name: "unexpected failure is not leaked", mediaID: "5", deleteErr: errors.New("secret internal detail"), wantStatus: http.StatusInternalServerError, wantCode: "internal_error", wantDelete: 1, wantMedia: "delete:internal_error:0"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			backend := &fakeMediaBackend{deleteErr: tt.deleteErr}
+			recorder := &fakeRecorder{}
+
+			rec := doRequest(newMediaRouter(backend, recorder), http.MethodDelete, "/v1/media/"+tt.mediaID, "", nil)
+
+			if rec.Code != tt.wantStatus || len(backend.deletedID) != tt.wantDelete {
+				t.Fatalf("status = %d, deletes = %d, want %d and %d (body %s)", rec.Code, len(backend.deletedID), tt.wantStatus, tt.wantDelete, rec.Body.String())
+			}
+			if tt.wantCode != "" {
+				if decoded := decodeBody(t, rec); decoded["code"] != tt.wantCode {
+					t.Errorf("body = %v, want code %s", decoded, tt.wantCode)
+				}
+			}
+			if tt.wantStatus == http.StatusNoContent && rec.Body.Len() != 0 {
+				t.Errorf("a 204 must have no body, got %q", rec.Body.String())
+			}
+			if strings.Contains(rec.Body.String(), "secret internal detail") {
+				t.Errorf("internal error leaked: %s", rec.Body.String())
 			}
 			if len(recorder.media) != 1 || recorder.media[0] != tt.wantMedia {
 				t.Errorf("recorded media = %v, want [%s]", recorder.media, tt.wantMedia)

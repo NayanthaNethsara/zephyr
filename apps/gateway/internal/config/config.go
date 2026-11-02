@@ -110,6 +110,7 @@ func (c Config) validate() error {
 		c.validateTransport,
 		c.validateRetry,
 		c.validateSending,
+		c.validateAPIKeys,
 	}
 	for _, check := range checks {
 		if err := check(); err != nil {
@@ -192,12 +193,12 @@ func (c Config) validateSending() error {
 	if !isAPIVersion(c.MetaAPIVersion) {
 		return fmt.Errorf("META_API_VERSION must look like v24.0, got %q", c.MetaAPIVersion)
 	}
-	if !c.SendingEnabled() {
-		return nil
-	}
+	return nil
+}
 
+func (c Config) validateAPIKeys() error {
 	keys := c.APIKeyList()
-	if len(keys) == 0 {
+	if c.SendingEnabled() && len(keys) == 0 {
 		return errors.New("API_KEYS is required when sending is enabled")
 	}
 	for _, key := range keys {

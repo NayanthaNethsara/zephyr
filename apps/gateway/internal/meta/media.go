@@ -36,6 +36,10 @@ type uploadResponse struct {
 	ID string `json:"id"`
 }
 
+type deleteResponse struct {
+	Success bool `json:"success"`
+}
+
 type sourceTracker struct {
 	reader io.Reader
 	mu     sync.Mutex
@@ -221,6 +225,38 @@ func (c *Client) fetchMediaContent(ctx context.Context, info mediaInfo) (core.Me
 		SHA256:   info.SHA256,
 		Size:     contentSize(response.ContentLength, info.FileSize),
 	}, nil
+}
+
+func (c *Client) DeleteMedia(ctx context.Context, mediaID string) error {
+	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+
+	endpoint := fmt.Sprintf("%s/%s/%s", c.baseURL, c.apiVersion, url.PathEscape(mediaID))
+	request, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	request.Header.Set("Authorization", "Bearer "+c.accessToken)
+
+	response, err := c.mediaClient.Do(request)
+	if err != nil {
+		return transportError(err)
+	}
+	defer func() { _ = response.Body.Close() }()
+
+	payload, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes))
+	if err != nil {
+		return unreadableResponse()
+	}
+	if response.StatusCode < 200 || response.StatusCode > 299 {
+		return mediaLookupError(response.StatusCode, payload)
+	}
+
+	var parsed deleteResponse
+	if err := json.Unmarshal(payload, &parsed); err != nil || !parsed.Success {
+		return unexpectedResponse()
+	}
+	return nil
 }
 
 func (c *Client) getWithToken(ctx context.Context, target string) (*http.Response, error) {

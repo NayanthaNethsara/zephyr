@@ -78,10 +78,14 @@ func run() error {
 
 	var messageSender api.MessageSender
 	var mediaProvider api.MediaProvider
+	var failedEvents api.FailedEventProvider
+	if len(cfg.APIKeyList()) > 0 {
+		failedEvents = core.NewFailedEventService(db)
+	}
 	if cfg.SendingEnabled() {
 		graphClient := meta.NewClient(graphBaseURL, cfg.MetaAPIVersion, cfg.WAAccessToken)
 		messageSender = core.NewSender(graphClient, db, cfg.WAPhoneNumberID, cfg.IdempotencyTTL)
-		mediaProvider = core.NewMediaService(graphClient, graphClient, cfg.WAPhoneNumberID)
+		mediaProvider = core.NewMediaService(graphClient, graphClient, graphClient, cfg.WAPhoneNumberID)
 	}
 
 	var background sync.WaitGroup
@@ -102,6 +106,7 @@ func run() error {
 			MetricsHandler:  metrics.Handler(),
 			Sender:          messageSender,
 			Media:           mediaProvider,
+			Events:          failedEvents,
 			APIKeys:         cfg.APIKeyList(),
 			MetaAppSecret:   cfg.MetaAppSecret,
 			MetaVerifyToken: cfg.MetaVerifyToken,

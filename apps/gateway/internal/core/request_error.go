@@ -17,6 +17,8 @@ const (
 	CodeUpstreamTimeout        = "upstream_timeout"
 	CodeRejected               = "rejected"
 	CodeMediaNotFound          = "media_not_found"
+	CodeEventNotFound          = "event_not_found"
+	CodePayloadTooLarge        = "payload_too_large"
 	CodeRequestInProgress      = "request_in_progress"
 	CodeIdempotencyKeyReused   = "idempotency_key_reused"
 )

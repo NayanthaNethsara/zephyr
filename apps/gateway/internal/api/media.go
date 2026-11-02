@@ -22,6 +22,7 @@ const (
 	mediaDeadline       = 6 * time.Minute
 	operationUpload     = "upload"
 	operationDownload   = "download"
+	operationDelete     = "delete"
 	resultOK            = "ok"
 	resultInterrupted   = "interrupted"
 	uploadFilePart      = "file"
@@ -32,6 +33,7 @@ const (
 type MediaProvider interface {
 	Upload(ctx context.Context, upload core.MediaUpload) (core.MediaUploadResult, error)
 	Download(ctx context.Context, mediaID string) (core.MediaDownload, error)
+	Delete(ctx context.Context, mediaID string) error
 }
 
 type uploadResponse struct {
@@ -103,7 +105,7 @@ func firstFilePart(request *http.Request) (*multipart.Part, string) {
 func uploadFailure(err error) error {
 	var tooLarge *http.MaxBytesError
 	if errors.As(err, &tooLarge) {
-		return &core.RequestError{Code: codePayloadTooLarge, Message: "the file is larger than the 100 MB limit"}
+		return &core.RequestError{Code: core.CodePayloadTooLarge, Message: "the file is larger than the 100 MB limit"}
 	}
 	var requestErr *core.RequestError
 	if !errors.As(err, &requestErr) && errors.Is(err, io.ErrUnexpectedEOF) {
@@ -142,6 +144,22 @@ func (h *handler) downloadMedia(c *gin.Context) {
 		"bytes", written,
 		"duration_ms", took.Milliseconds(),
 	)
+}
+
+func (h *handler) deleteMedia(c *gin.Context) {
+	started := time.Now()
+	logger := requestLogger(h.deps.Logger, c)
+	mediaID := c.Param("id")
+
+	if err := h.deps.Media.Delete(c.Request.Context(), mediaID); err != nil {
+		h.failMedia(c, logger, operationDelete, started, 0, err)
+		return
+	}
+
+	took := time.Since(started)
+	h.deps.Recorder.MediaResult(operationDelete, resultOK, 0, took)
+	logger.Info("media deleted", "media_id", mediaID, "duration_ms", took.Milliseconds())
+	c.Status(http.StatusNoContent)
 }
 
 func setDownloadHeaders(c *gin.Context, download core.MediaDownload) {

@@ -45,10 +45,15 @@ type fakeRecorder struct {
 	requests       []string
 	sends          []string
 	media          []string
+	replays        []string
 }
 
 func (f *fakeRecorder) MediaResult(operation, result string, size int64, _ time.Duration) {
 	f.media = append(f.media, operation+":"+result+":"+strconv.FormatInt(size, 10))
+}
+
+func (f *fakeRecorder) ReplayResult(result string) {
+	f.replays = append(f.replays, result)
 }
 
 func (f *fakeRecorder) SendResult(messageType, result string, _ time.Duration) {

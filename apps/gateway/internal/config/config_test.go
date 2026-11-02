@@ -117,6 +117,15 @@ func TestLoad(t *testing.T) {
 		{name: "phone number without token", env: withOverrides(map[string]string{"WA_PHONE_NUMBER_ID": "111"}), wantErr: true},
 		{name: "token without phone number", env: withOverrides(map[string]string{"WA_ACCESS_TOKEN": "token"}), wantErr: true},
 		{name: "sending enabled without api keys", env: withOverrides(map[string]string{"WA_PHONE_NUMBER_ID": "111", "WA_ACCESS_TOKEN": "token"}), wantErr: true},
+		{name: "short api key without sending", env: withOverrides(map[string]string{"API_KEYS": "short"}), wantErr: true},
+		{name: "valid api key without sending", env: withOverrides(map[string]string{"API_KEYS": strings.Repeat("k", 32)}), want: Config{
+			Port: 8080, LogLevel: "info", DBURL: "sqlite:///data/gateway.db", MetaAppSecret: "app-secret",
+			MetaVerifyToken: "verify-token-123456", Transport: "http", TransportTopicPrefix: "wa",
+			WebhookURL: "https://example.com/hook", WebhookSigningSecret: "signing-secret-123456",
+			RetryMaxAttempts: 8, RetryBaseDelay: 2 * time.Second, DedupTTL: 48 * time.Hour,
+			FailedRetention: 168 * time.Hour, MetaAPIVersion: "v24.0", IdempotencyTTL: 24 * time.Hour,
+			APIKeys: strings.Repeat("k", 32),
+		}},
 		{name: "sending enabled with a short api key", env: withOverrides(map[string]string{"WA_PHONE_NUMBER_ID": "111", "WA_ACCESS_TOKEN": "token", "API_KEYS": "short"}), wantErr: true},
 		{name: "idempotency ttl override is accepted", env: withOverrides(map[string]string{"IDEMPOTENCY_TTL": "1h"}), want: Config{
 			Port: 8080, LogLevel: "info", DBURL: "sqlite:///data/gateway.db", MetaAppSecret: "app-secret",

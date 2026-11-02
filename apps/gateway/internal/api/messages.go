@@ -23,7 +23,6 @@ const (
 	resultReplayed          = "replayed"
 	maxIdempotencyKeyLength = 255
 	codeInternalError       = "internal_error"
-	codePayloadTooLarge     = "payload_too_large"
 	resultSent              = "sent"
 	unknownMessageType      = "unknown"
 	fieldTo                 = "to"
@@ -55,7 +54,7 @@ func (h *handler) sendMessage(c *gin.Context) {
 	body, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, maxSendBodyBytes))
 	if err != nil {
 		h.rejectSend(c, logger, core.OutboundMessage{}, started, http.StatusRequestEntityTooLarge, errorBody{
-			Code:    codePayloadTooLarge,
+			Code:    core.CodePayloadTooLarge,
 			Message: "request body is too large",
 		})
 		return
@@ -233,9 +232,9 @@ func statusForCode(code string) int {
 	switch code {
 	case core.CodeInvalidRequest:
 		return http.StatusBadRequest
-	case core.CodeMediaNotFound:
+	case core.CodeMediaNotFound, core.CodeEventNotFound:
 		return http.StatusNotFound
-	case codePayloadTooLarge:
+	case core.CodePayloadTooLarge:
 		return http.StatusRequestEntityTooLarge
 	case core.CodeRateLimited:
 		return http.StatusTooManyRequests

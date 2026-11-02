@@ -428,3 +428,56 @@ func TestSafeFilename(t *testing.T) {
 		})
 	}
 }
+
+func TestDeleteMedia(t *testing.T) {
+	tests := []struct {
+		name           string
+		status         int
+		body           string
+		isServerClosed bool
+		wantCode       string
+		wantRetryable  bool
+	}{
+		{name: "deleted", status: http.StatusOK, body: `{"success":true}`},
+		{name: "meta reports no success", status: http.StatusOK, body: `{"success":false}`, wantCode: core.CodeUpstreamUnavailable, wantRetryable: true},
+		{name: "body is not json", status: http.StatusOK, body: `ok`, wantCode: core.CodeUpstreamUnavailable, wantRetryable: true},
+		{name: "unknown media id", status: http.StatusBadRequest, body: `{"error":{"message":"Object does not exist","code":100}}`, wantCode: core.CodeMediaNotFound},
+		{name: "answers not found", status: http.StatusNotFound, body: `{}`, wantCode: core.CodeMediaNotFound},
+		{name: "expired token", status: http.StatusUnauthorized, body: `{"error":{"message":"expired","code":190}}`, wantCode: core.CodeUpstreamAuthFailed},
+		{name: "html error page", status: http.StatusBadGateway, body: `<html></html>`, wantCode: core.CodeUpstreamUnavailable, wantRetryable: true},
+		{name: "unreachable server", status: http.StatusOK, body: `{"success":true}`, isServerClosed: true, wantCode: core.CodeUpstreamUnavailable, wantRetryable: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotMethod, gotPath, gotAuthorization string
+			client, server := newTLSClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotMethod, gotPath, gotAuthorization = r.Method, r.URL.Path, r.Header.Get("Authorization")
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			if tt.isServerClosed {
+				server.Close()
+			}
+
+			err := client.DeleteMedia(context.Background(), "media-1")
+
+			if tt.wantCode == "" {
+				if err != nil {
+					t.Fatalf("DeleteMedia() error = %v", err)
+				}
+				if gotMethod != http.MethodDelete || gotPath != "/v24.0/media-1" || gotAuthorization != "Bearer secret-token" {
+					t.Errorf("request = %s %s with %q", gotMethod, gotPath, gotAuthorization)
+				}
+				return
+			}
+			var requestErr *core.RequestError
+			if !errors.As(err, &requestErr) || requestErr.Code != tt.wantCode || requestErr.IsRetryable != tt.wantRetryable {
+				t.Fatalf("error = %#v, want %s retryable=%v", err, tt.wantCode, tt.wantRetryable)
+			}
+			if strings.Contains(requestErr.Message, "secret-token") {
+				t.Errorf("message leaks the token: %q", requestErr.Message)
+			}
+		})
+	}
+}

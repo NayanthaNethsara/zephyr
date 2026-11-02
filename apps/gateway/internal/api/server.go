@@ -21,6 +21,7 @@ type Recorder interface {
 	EventIngested(eventType string, isQueued bool)
 	SendResult(messageType, result string, took time.Duration)
 	MediaResult(operation, result string, size int64, took time.Duration)
+	ReplayResult(result string)
 	HTTPRequest(method, route string, status int, took time.Duration)
 }
 
@@ -30,6 +31,7 @@ type Deps struct {
 	MetricsHandler  http.Handler
 	Sender          MessageSender
 	Media           MediaProvider
+	Events          FailedEventProvider
 	APIKeys         []string
 	MetaAppSecret   string
 	MetaVerifyToken string
@@ -51,7 +53,7 @@ func NewRouter(deps Deps) *gin.Engine {
 	router.GET("/readyz", h.readyz)
 	router.GET("/webhook", h.verifyWebhook)
 	router.POST("/webhook", h.receiveWebhook)
-	if deps.Sender != nil || deps.Media != nil {
+	if deps.Sender != nil || deps.Media != nil || deps.Events != nil {
 		v1 := router.Group("/v1", requireAPIKey(newKeyRing(deps.APIKeys), deps.Logger))
 		if deps.Sender != nil {
 			v1.POST("/messages", h.sendMessage)
@@ -59,6 +61,11 @@ func NewRouter(deps Deps) *gin.Engine {
 		if deps.Media != nil {
 			v1.POST("/media", h.uploadMedia)
 			v1.GET("/media/:id", h.downloadMedia)
+			v1.DELETE("/media/:id", h.deleteMedia)
+		}
+		if deps.Events != nil {
+			v1.GET("/events/failed", h.listFailedEvents)
+			v1.POST("/events/:id/replay", h.replayEvent)
 		}
 	}
 	if deps.MetricsHandler != nil {

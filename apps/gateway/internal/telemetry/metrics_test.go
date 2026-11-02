@@ -113,6 +113,18 @@ func TestRecordedMetricsAreExposed(t *testing.T) {
 			},
 		},
 		{
+			name: "event replays are counted by result",
+			record: func(m *Metrics) {
+				m.ReplayResult("queued")
+				m.ReplayResult("queued")
+				m.ReplayResult("event_not_found")
+			},
+			want: []string{
+				`zephyr_event_replays_total{result="queued"} 2`,
+				`zephyr_event_replays_total{result="event_not_found"} 1`,
+			},
+		},
+		{
 			name:   "go runtime metrics are always present",
 			record: func(*Metrics) {},
 			want:   []string{"go_goroutines"},

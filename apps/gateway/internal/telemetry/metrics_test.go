@@ -125,6 +125,34 @@ func TestRecordedMetricsAreExposed(t *testing.T) {
 			},
 		},
 		{
+			name: "queued message attempts are counted by result",
+			record: func(m *Metrics) {
+				m.AsyncSendResult("sent")
+				m.AsyncSendResult("retry")
+				m.AsyncSendResult("retry")
+				m.AsyncSendResult("failed")
+			},
+			want: []string{
+				`zephyr_async_sends_total{result="sent"} 1`,
+				`zephyr_async_sends_total{result="retry"} 2`,
+				`zephyr_async_sends_total{result="failed"} 1`,
+			},
+		},
+		{
+			name: "broker send requests are counted by result",
+			record: func(m *Metrics) {
+				m.OutboundConsumed("queued")
+				m.OutboundConsumed("queued")
+				m.OutboundConsumed("rejected")
+				m.OutboundConsumed("retry")
+			},
+			want: []string{
+				`zephyr_outbound_consumed_total{result="queued"} 2`,
+				`zephyr_outbound_consumed_total{result="rejected"} 1`,
+				`zephyr_outbound_consumed_total{result="retry"} 1`,
+			},
+		},
+		{
 			name:   "go runtime metrics are always present",
 			record: func(*Metrics) {},
 			want:   []string{"go_goroutines"},

@@ -28,6 +28,35 @@ func (f *fakeMessenger) Send(_ context.Context, phoneNumberID string, message Ou
 	return f.result, f.err
 }
 
+type fakeSessions struct {
+	state   SessionState
+	err     error
+	checked []string
+}
+
+func (f *fakeSessions) Check(_ context.Context, phone string) (Session, error) {
+	f.checked = append(f.checked, phone)
+	return Session{State: f.state}, f.err
+}
+
+type fakeLimiter struct {
+	err    error
+	waited []string
+	onWait func()
+}
+
+func (f *fakeLimiter) Wait(_ context.Context, phoneNumberID string) error {
+	f.waited = append(f.waited, phoneNumberID)
+	if f.onWait != nil {
+		f.onWait()
+	}
+	return f.err
+}
+
+func newTestSender(messenger Messenger, idempotency store.IdempotencyStore, sessions SessionChecker) *Sender {
+	return NewSender(SenderDeps{Messenger: messenger, Idempotency: idempotency, Sessions: sessions, Limiter: &fakeLimiter{}}, "111", 24*time.Hour)
+}
+
 func TestValidateOutbound(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -141,7 +170,7 @@ func TestSenderSend(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			messenger := &fakeMessenger{result: SendResult{MessageID: "wamid.sent"}, err: tt.messengerErr}
-			sender := NewSender(messenger, &fakeIdempotencyStore{}, "111", 24*time.Hour)
+			sender := newTestSender(messenger, &fakeIdempotencyStore{}, &fakeSessions{state: SessionOpen})
 
 			result, err := sender.Send(context.Background(), tt.message)
 
@@ -291,7 +320,7 @@ func TestSenderIdempotency(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			messenger := &fakeMessenger{result: SendResult{MessageID: "wamid.sent"}, err: tt.messengerErr}
 			idempotency := &fakeIdempotencyStore{outcome: tt.outcome, storedID: tt.storedID, claimErr: tt.claimErr, completeErr: tt.completeErr}
-			sender := NewSender(messenger, idempotency, "111", 24*time.Hour)
+			sender := newTestSender(messenger, idempotency, &fakeSessions{state: SessionOpen})
 
 			ctx := context.Background()
 			if tt.cancelBefore {
@@ -367,6 +396,71 @@ func TestFingerprint(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := fingerprint(base) == fingerprint(tt.other); got != tt.wantEqual {
 				t.Fatalf("fingerprints equal = %v, want %v", got, tt.wantEqual)
+			}
+		})
+	}
+}
+
+func TestSenderWindowCheck(t *testing.T) {
+	text := OutboundMessage{To: "94770000000", Type: MessageText, Content: json.RawMessage(`{"body":"hi"}`)}
+	keyed := text
+	keyed.IdempotencyKey = "k1"
+	template := OutboundMessage{To: "94770000000", Type: MessageTemplate, Content: json.RawMessage(`{"name":"x","language":{"code":"en"}}`)}
+	image := OutboundMessage{To: "94770000000", Type: MessageImage, Content: json.RawMessage(`{"id":"1"}`)}
+	reaction := OutboundMessage{To: "94770000000", Type: MessageReaction, Content: json.RawMessage(`{"message_id":"wamid.1"}`)}
+	storeDown := errors.New("disk full")
+
+	tests := []struct {
+		name         string
+		message      OutboundMessage
+		state        SessionState
+		sessionErr   error
+		wantChecks   int
+		wantSends    int
+		wantCode     string
+		wantPlain    bool
+		wantReleased []string
+		wantComplete []string
+	}{
+		{name: "text in an open window is sent", message: text, state: SessionOpen, wantChecks: 1, wantSends: 1},
+		{name: "text with an unknown window is left for Meta to judge", message: text, state: SessionUnknown, wantChecks: 1, wantSends: 1},
+		{name: "text in a closed window is rejected without calling Meta", message: text, state: SessionClosed, wantChecks: 1, wantCode: CodeWindowClosed},
+		{name: "image in a closed window is rejected", message: image, state: SessionClosed, wantChecks: 1, wantCode: CodeWindowClosed},
+		{name: "reaction in a closed window is rejected", message: reaction, state: SessionClosed, wantChecks: 1, wantCode: CodeWindowClosed},
+		{name: "template skips the check and is sent in a closed window", message: template, state: SessionClosed, wantChecks: 0, wantSends: 1},
+		{name: "session lookup failure is not a request error", message: text, sessionErr: storeDown, wantChecks: 1, wantPlain: true},
+		{name: "keyed send in an open window completes the key", message: keyed, state: SessionOpen, wantChecks: 1, wantSends: 1, wantComplete: []string{"k1=wamid.sent"}},
+		{name: "keyed send in a closed window releases the key", message: keyed, state: SessionClosed, wantChecks: 1, wantCode: CodeWindowClosed, wantReleased: []string{"k1"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			messenger := &fakeMessenger{result: SendResult{MessageID: "wamid.sent"}}
+			idempotency := &fakeIdempotencyStore{}
+			sessions := &fakeSessions{state: tt.state, err: tt.sessionErr}
+
+			_, err := newTestSender(messenger, idempotency, sessions).Send(context.Background(), tt.message)
+
+			if len(sessions.checked) != tt.wantChecks || messenger.calls != tt.wantSends {
+				t.Fatalf("checks = %d, sends = %d, want %d and %d", len(sessions.checked), messenger.calls, tt.wantChecks, tt.wantSends)
+			}
+			if strings.Join(idempotency.released, ",") != strings.Join(tt.wantReleased, ",") || strings.Join(idempotency.completed, ",") != strings.Join(tt.wantComplete, ",") {
+				t.Errorf("released = %v, completed = %v, want %v and %v", idempotency.released, idempotency.completed, tt.wantReleased, tt.wantComplete)
+			}
+			var requestErr *RequestError
+			switch {
+			case tt.wantPlain:
+				if err == nil || errors.As(err, &requestErr) {
+					t.Fatalf("error = %#v, want a plain error", err)
+				}
+			case tt.wantCode != "":
+				if !errors.As(err, &requestErr) || requestErr.Code != tt.wantCode || requestErr.IsRetryable {
+					t.Fatalf("error = %#v, want non-retryable %s", err, tt.wantCode)
+				}
+			default:
+				if err != nil {
+					t.Fatalf("Send() error = %v", err)
+				}
 			}
 		})
 	}

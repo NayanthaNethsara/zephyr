@@ -16,12 +16,28 @@ import (
 	"github.com/NayanthaNethsara/zephyr/apps/gateway/internal/store"
 )
 
+type noLimit struct{}
+
+func (noLimit) Wait(context.Context, string) error { return nil }
+
+type stubSessions struct {
+	state core.SessionState
+}
+
+func (s stubSessions) Check(context.Context, string) (core.Session, error) {
+	if s.state == "" {
+		return core.Session{State: core.SessionOpen}, nil
+	}
+	return core.Session{State: s.state}, nil
+}
+
 func TestSendThroughRealCoreAndMetaClient(t *testing.T) {
 	tests := []struct {
 		name          string
 		graphStatus   int
 		graphBody     string
 		requestBody   string
+		sessionState  core.SessionState
 		wantStatus    int
 		wantCode      string
 		wantRetryable bool
@@ -44,6 +60,26 @@ func TestSendThroughRealCoreAndMetaClient(t *testing.T) {
 			requestBody:   `{"to":"94770000000","type":"text","text":{"body":"hi"}}`,
 			wantStatus:    http.StatusUnprocessableEntity,
 			wantCode:      "window_closed",
+			wantGraphHits: 1,
+		},
+		{
+			name:          "closed window is refused before reaching meta",
+			graphStatus:   200,
+			graphBody:     `{"messages":[{"id":"wamid.UNEXPECTED"}]}`,
+			requestBody:   `{"to":"94770000000","type":"text","text":{"body":"hi"}}`,
+			sessionState:  core.SessionClosed,
+			wantStatus:    http.StatusUnprocessableEntity,
+			wantCode:      "window_closed",
+			wantGraphHits: 0,
+		},
+		{
+			name:          "template goes out in a closed window",
+			graphStatus:   200,
+			graphBody:     `{"messages":[{"id":"wamid.TEMPLATE"}]}`,
+			requestBody:   `{"to":"94770000000","type":"template","template":{"name":"hello","language":{"code":"en"}}}`,
+			sessionState:  core.SessionClosed,
+			wantStatus:    http.StatusOK,
+			wantWAMID:     "wamid.TEMPLATE",
 			wantGraphHits: 1,
 		},
 		{
@@ -99,7 +135,7 @@ func TestSendThroughRealCoreAndMetaClient(t *testing.T) {
 			}))
 			defer graph.Close()
 
-			sender := core.NewSender(meta.NewClient(graph.URL, "v24.0", "meta-token"), newMemoryIdempotencyStore(), "111", time.Hour)
+			sender := core.NewSender(core.SenderDeps{Messenger: meta.NewClient(graph.URL, "v24.0", "meta-token"), Idempotency: newMemoryIdempotencyStore(), Sessions: stubSessions{state: tt.sessionState}, Limiter: noLimit{}}, "111", time.Hour)
 			router := NewRouter(Deps{
 				Ingestor: &fakeIngestor{},
 				Recorder: &fakeRecorder{},
@@ -247,7 +283,7 @@ func TestIdempotentSendThroughRealCoreAndMetaClient(t *testing.T) {
 			defer graph.Close()
 
 			recorder := &fakeRecorder{}
-			sender := core.NewSender(meta.NewClient(graph.URL, "v24.0", "meta-token"), newMemoryIdempotencyStore(), "111", time.Hour)
+			sender := core.NewSender(core.SenderDeps{Messenger: meta.NewClient(graph.URL, "v24.0", "meta-token"), Idempotency: newMemoryIdempotencyStore(), Sessions: stubSessions{}, Limiter: noLimit{}}, "111", time.Hour)
 			router := NewRouter(Deps{
 				Ingestor: &fakeIngestor{},
 				Recorder: recorder,

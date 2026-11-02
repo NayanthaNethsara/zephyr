@@ -27,6 +27,8 @@ type Metrics struct {
 	mediaDuration    *prometheus.HistogramVec
 	mediaBytes       *prometheus.CounterVec
 	eventReplays     *prometheus.CounterVec
+	asyncSends       *prometheus.CounterVec
+	consumed         *prometheus.CounterVec
 }
 
 func New() *Metrics {
@@ -97,6 +99,16 @@ func New() *Metrics {
 			Name:      "media_bytes_total",
 			Help:      "Bytes streamed through media uploads and downloads.",
 		}, []string{"operation"}),
+		asyncSends: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "async_sends_total",
+			Help:      "Attempts to deliver queued messages to Meta, by result (sent, retry, or failed).",
+		}, []string{"result"}),
+		consumed: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "outbound_consumed_total",
+			Help:      "Send requests read from the broker, by result (queued, rejected, or retry).",
+		}, []string{"result"}),
 		eventReplays: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: namespace,
 			Name:      "event_replays_total",
@@ -120,6 +132,8 @@ func New() *Metrics {
 		m.mediaDuration,
 		m.mediaBytes,
 		m.eventReplays,
+		m.asyncSends,
+		m.consumed,
 	)
 	return m
 }
@@ -157,6 +171,14 @@ func (m *Metrics) HTTPRequest(method, route string, status int, took time.Durati
 func (m *Metrics) SendResult(messageType, result string, took time.Duration) {
 	m.sendRequests.WithLabelValues(messageType, result).Inc()
 	m.sendDuration.WithLabelValues(messageType).Observe(took.Seconds())
+}
+
+func (m *Metrics) OutboundConsumed(result string) {
+	m.consumed.WithLabelValues(result).Inc()
+}
+
+func (m *Metrics) AsyncSendResult(result string) {
+	m.asyncSends.WithLabelValues(result).Inc()
 }
 
 func (m *Metrics) ReplayResult(result string) {

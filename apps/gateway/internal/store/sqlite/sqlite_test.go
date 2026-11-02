@@ -83,8 +83,8 @@ func TestOpen(t *testing.T) {
 			if err := s.Ping(context.Background()); err != nil {
 				t.Errorf("Ping() error = %v", err)
 			}
-			if got := countRows(t, s, `SELECT COUNT(*) FROM sqlite_master WHERE name IN ('dedup_keys', 'outbox_entries', 'idempotency_keys')`); got != 3 {
-				t.Errorf("migrated tables = %d, want 3", got)
+			if got := countRows(t, s, `SELECT COUNT(*) FROM sqlite_master WHERE name IN ('dedup_keys', 'outbox_entries', 'idempotency_keys', 'sessions', 'send_jobs')`); got != 5 {
+				t.Errorf("migrated tables = %d, want 5", got)
 			}
 		})
 	}

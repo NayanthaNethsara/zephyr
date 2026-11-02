@@ -47,6 +47,12 @@ func (s *Store) SaveInbound(ctx context.Context, records []store.InboundRecord) 
 		if err != nil {
 			return nil, fmt.Errorf("insert outbox entry: %w", err)
 		}
+		if record.Session != nil {
+			touch := record.Session
+			if _, err := tx.ExecContext(ctx, upsertSession, touch.PhoneHash, touch.PhoneNumberID, toMillis(touch.At)); err != nil {
+				return nil, fmt.Errorf("upsert session: %w", err)
+			}
+		}
 		saved = append(saved, entry.ID)
 	}
 

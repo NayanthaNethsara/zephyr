@@ -2,8 +2,6 @@ package core
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -15,14 +13,16 @@ type Service struct {
 	store       store.Store
 	topicPrefix string
 	dedupTTL    time.Duration
+	phoneHash   []byte
 	now         func() time.Time
 }
 
-func NewService(s store.Store, topicPrefix string, dedupTTL time.Duration) *Service {
+func NewService(s store.Store, topicPrefix string, dedupTTL time.Duration, phoneHashKey string) *Service {
 	return &Service{
 		store:       s,
 		topicPrefix: topicPrefix,
 		dedupTTL:    dedupTTL,
+		phoneHash:   []byte(phoneHashKey),
 		now:         time.Now,
 	}
 }
@@ -76,7 +76,7 @@ func buildResults(items []Inbound, records []store.InboundRecord, saved []string
 }
 
 func (s *Service) buildRecord(item Inbound, now time.Time) (store.InboundRecord, error) {
-	id, err := newEventID()
+	id, err := newID("evt_")
 	if err != nil {
 		return store.InboundRecord{}, err
 	}
@@ -101,6 +101,7 @@ func (s *Service) buildRecord(item Inbound, now time.Time) (store.InboundRecord,
 	return store.InboundRecord{
 		DedupKey:       item.DedupKey,
 		DedupExpiresAt: now.Add(s.dedupTTL),
+		Session:        s.sessionTouch(item, occurredAt),
 		Entry: store.OutboxEntry{
 			ID:            id,
 			Topic:         s.topicPrefix + "." + item.Type.topicSuffix(),
@@ -112,10 +113,13 @@ func (s *Service) buildRecord(item Inbound, now time.Time) (store.InboundRecord,
 	}, nil
 }
 
-func newEventID() (string, error) {
-	raw := make([]byte, 16)
-	if _, err := rand.Read(raw); err != nil {
-		return "", fmt.Errorf("generate event id: %w", err)
+func (s *Service) sessionTouch(item Inbound, at time.Time) *store.SessionTouch {
+	if item.Type != EventMessageInbound || item.PartitionKey == "" {
+		return nil
 	}
-	return "evt_" + hex.EncodeToString(raw), nil
+	return &store.SessionTouch{
+		PhoneHash:     hashPhone(s.phoneHash, item.PartitionKey),
+		PhoneNumberID: item.PhoneNumberID,
+		At:            at,
+	}
 }

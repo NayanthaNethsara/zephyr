@@ -10,6 +10,7 @@ type EventType string
 const (
 	EventMessageInbound EventType = "message.inbound"
 	EventMessageStatus  EventType = "message.status"
+	EventMessageResult  EventType = "message.result"
 )
 
 type Inbound struct {
@@ -46,6 +47,8 @@ func (t EventType) topicSuffix() string {
 	switch t {
 	case EventMessageStatus:
 		return "status"
+	case EventMessageResult:
+		return "results"
 	default:
 		return "inbound"
 	}

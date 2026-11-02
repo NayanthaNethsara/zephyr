@@ -100,7 +100,7 @@ func TestIngest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			fake := &fakeStore{duplicates: tt.duplicates, saveErr: tt.saveErr}
-			service := NewService(fake, "wa", 48*time.Hour)
+			service := NewService(fake, "wa", 48*time.Hour, "phone-hash-key-0123456789abcdef")
 			service.now = func() time.Time { return now }
 
 			results, err := service.Ingest(context.Background(), tt.items)
@@ -162,9 +162,53 @@ func TestReady(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := NewService(&fakeStore{pingErr: tt.pingErr}, "wa", time.Hour).Ready(context.Background())
+			err := NewService(&fakeStore{pingErr: tt.pingErr}, "wa", time.Hour, "phone-hash-key-0123456789abcdef").Ready(context.Background())
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("Ready() error = %v, want %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestIngestRecordsTheCustomerSession(t *testing.T) {
+	now := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+	occurred := now.Add(-time.Minute)
+	const hashKey = "phone-hash-key-0123456789abcdef"
+
+	tests := []struct {
+		name        string
+		item        Inbound
+		wantSession bool
+		wantAt      time.Time
+	}{
+		{name: "inbound message touches the session at the message time", item: Inbound{Type: EventMessageInbound, DedupKey: "a", PartitionKey: "94770000000", PhoneNumberID: "111", OccurredAt: occurred}, wantSession: true, wantAt: occurred},
+		{name: "inbound message without a timestamp uses now", item: Inbound{Type: EventMessageInbound, DedupKey: "b", PartitionKey: "94770000000", PhoneNumberID: "111"}, wantSession: true, wantAt: now},
+		{name: "status updates do not open a window", item: Inbound{Type: EventMessageStatus, DedupKey: "c", PartitionKey: "94770000000", PhoneNumberID: "111", OccurredAt: occurred}},
+		{name: "inbound message without a sender records nothing", item: Inbound{Type: EventMessageInbound, DedupKey: "d", PhoneNumberID: "111"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &fakeStore{}
+			service := NewService(fake, "wa", time.Hour, hashKey)
+			service.now = func() time.Time { return now }
+
+			if _, err := service.Ingest(context.Background(), []Inbound{tt.item}); err != nil {
+				t.Fatal(err)
+			}
+
+			session := fake.saved[0].Session
+			if (session != nil) != tt.wantSession {
+				t.Fatalf("session = %+v, want present=%v", session, tt.wantSession)
+			}
+			if session == nil {
+				return
+			}
+			if session.PhoneHash != hashPhone([]byte(hashKey), "94770000000") || session.PhoneNumberID != "111" || !session.At.Equal(tt.wantAt) {
+				t.Errorf("session = %+v", session)
+			}
+			if strings.Contains(session.PhoneHash, "94770000000") {
+				t.Error("the stored value must not contain the phone number")
 			}
 		})
 	}

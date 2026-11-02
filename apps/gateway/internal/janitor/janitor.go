@@ -4,25 +4,26 @@ import (
 	"context"
 	"log/slog"
 	"time"
-
-	"github.com/NayanthaNethsara/zephyr/apps/gateway/internal/store"
 )
 
-type Janitor struct {
-	store           store.Store
-	interval        time.Duration
-	failedRetention time.Duration
-	logger          *slog.Logger
-	now             func() time.Time
+type Task struct {
+	Name string
+	Run  func(ctx context.Context, now time.Time) error
 }
 
-func New(s store.Store, interval, failedRetention time.Duration, logger *slog.Logger) *Janitor {
+type Janitor struct {
+	tasks    []Task
+	interval time.Duration
+	logger   *slog.Logger
+	now      func() time.Time
+}
+
+func New(tasks []Task, interval time.Duration, logger *slog.Logger) *Janitor {
 	return &Janitor{
-		store:           s,
-		interval:        interval,
-		failedRetention: failedRetention,
-		logger:          logger,
-		now:             time.Now,
+		tasks:    tasks,
+		interval: interval,
+		logger:   logger,
+		now:      time.Now,
 	}
 }
 
@@ -42,7 +43,9 @@ func (j *Janitor) Run(ctx context.Context) {
 
 func (j *Janitor) sweep(ctx context.Context) {
 	now := j.now()
-	if err := j.store.DeleteExpired(ctx, now, now.Add(-j.failedRetention)); err != nil && ctx.Err() == nil {
-		j.logger.Error("delete expired rows", "error", err)
+	for _, task := range j.tasks {
+		if err := task.Run(ctx, now); err != nil && ctx.Err() == nil {
+			j.logger.Error("cleanup task failed", "task", task.Name, "error", err)
+		}
 	}
 }

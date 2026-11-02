@@ -19,5 +19,17 @@ services:
       - no-new-privileges:true
     restart: unless-stopped
 
+  nats:
+    image: nats:2-alpine
+    profiles:
+      - nats
+    command: ['-js', '-sd', '/data']
+    volumes:
+      - nats_data:/data
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
 volumes:
   gateway_data:
+  nats_data:

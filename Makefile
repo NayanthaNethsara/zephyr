@@ -55,9 +55,13 @@ docker-build: ## Build the Docker image
 up: ## Start the gateway with Docker Compose
 	docker compose up --build --detach gateway
 
+.PHONY: up-nats
+up-nats: ## Start the gateway and a NATS JetStream server (set TRANSPORT=nats and NATS_URL=nats://nats:4222 in .env)
+	docker compose --profile nats up --build --detach gateway nats
+
 .PHONY: down
 down: ## Stop Docker Compose services
-	docker compose down
+	docker compose --profile nats down
 
 .PHONY: logs
 logs: ## Follow gateway logs

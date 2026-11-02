@@ -40,12 +40,12 @@ func (t MessageType) IsSupported() bool {
 }
 
 type OutboundMessage struct {
-	PhoneNumberID  string
-	To             string
-	Type           MessageType
-	Content        json.RawMessage
-	CorrelationID  string
-	IdempotencyKey string
+	PhoneNumberID  string          `json:"phone_number_id,omitempty"`
+	To             string          `json:"to"`
+	Type           MessageType     `json:"type"`
+	Content        json.RawMessage `json:"content"`
+	CorrelationID  string          `json:"correlation_id,omitempty"`
+	IdempotencyKey string          `json:"idempotency_key,omitempty"`
 }
 
 type SendResult struct {
@@ -58,33 +58,52 @@ type Messenger interface {
 	Send(ctx context.Context, phoneNumberID string, message OutboundMessage) (SendResult, error)
 }
 
+type SessionChecker interface {
+	Check(ctx context.Context, phone string) (Session, error)
+}
+
+type SenderDeps struct {
+	Messenger   Messenger
+	Idempotency store.IdempotencyStore
+	Sessions    SessionChecker
+	Limiter     RateLimiter
+}
+
 type Sender struct {
 	messenger      Messenger
 	idempotency    store.IdempotencyStore
+	sessions       SessionChecker
+	limiter        RateLimiter
 	phoneNumberID  string
 	idempotencyTTL time.Duration
 	now            func() time.Time
 }
 
-func NewSender(messenger Messenger, idempotency store.IdempotencyStore, phoneNumberID string, idempotencyTTL time.Duration) *Sender {
+func NewSender(deps SenderDeps, phoneNumberID string, idempotencyTTL time.Duration) *Sender {
 	return &Sender{
-		messenger:      messenger,
-		idempotency:    idempotency,
+		messenger:      deps.Messenger,
+		idempotency:    deps.Idempotency,
+		sessions:       deps.Sessions,
+		limiter:        deps.Limiter,
 		phoneNumberID:  phoneNumberID,
 		idempotencyTTL: idempotencyTTL,
 		now:            time.Now,
 	}
 }
 
-func (s *Sender) Send(ctx context.Context, message OutboundMessage) (SendResult, error) {
+func (s *Sender) Validate(message OutboundMessage) error {
 	if message.PhoneNumberID != "" && message.PhoneNumberID != s.phoneNumberID {
-		return SendResult{}, invalidRequest("phone_number_id does not match the configured number")
+		return invalidRequest("phone_number_id does not match the configured number")
 	}
-	if err := validateOutbound(message); err != nil {
+	return validateOutbound(message)
+}
+
+func (s *Sender) Send(ctx context.Context, message OutboundMessage) (SendResult, error) {
+	if err := s.Validate(message); err != nil {
 		return SendResult{}, err
 	}
 	if message.IdempotencyKey == "" {
-		return s.messenger.Send(ctx, s.phoneNumberID, message)
+		return s.deliver(ctx, message)
 	}
 	return s.sendOnce(ctx, message)
 }
@@ -122,7 +141,7 @@ func (s *Sender) sendOnce(ctx context.Context, message OutboundMessage) (SendRes
 }
 
 func (s *Sender) deliverAndSettle(ctx context.Context, message OutboundMessage) (SendResult, error) {
-	result, sendErr := s.messenger.Send(ctx, s.phoneNumberID, message)
+	result, sendErr := s.deliver(ctx, message)
 
 	settleCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), settleTimeout)
 	defer cancel()
@@ -135,6 +154,33 @@ func (s *Sender) deliverAndSettle(ctx context.Context, message OutboundMessage) 
 		result.IsKeyUnrecorded = true
 	}
 	return result, nil
+}
+
+func (s *Sender) deliver(ctx context.Context, message OutboundMessage) (SendResult, error) {
+	if err := s.requireOpenWindow(ctx, message); err != nil {
+		return SendResult{}, err
+	}
+	if err := s.limiter.Wait(ctx, s.phoneNumberID); err != nil {
+		return SendResult{}, err
+	}
+	return s.messenger.Send(ctx, s.phoneNumberID, message)
+}
+
+func (s *Sender) requireOpenWindow(ctx context.Context, message OutboundMessage) error {
+	if message.Type == MessageTemplate {
+		return nil
+	}
+	session, err := s.sessions.Check(ctx, message.To)
+	if err != nil {
+		return err
+	}
+	if session.State == SessionClosed {
+		return &RequestError{
+			Code:    CodeWindowClosed,
+			Message: "the 24-hour customer service window is closed, send an approved template message instead",
+		}
+	}
+	return nil
 }
 
 func invalidRequest(message string) *RequestError {

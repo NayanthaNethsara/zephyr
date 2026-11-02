@@ -32,6 +32,8 @@ type Deps struct {
 	Sender          MessageSender
 	Media           MediaProvider
 	Events          FailedEventProvider
+	Sessions        SessionProvider
+	Async           AsyncSender
 	APIKeys         []string
 	MetaAppSecret   string
 	MetaVerifyToken string
@@ -53,7 +55,7 @@ func NewRouter(deps Deps) *gin.Engine {
 	router.GET("/readyz", h.readyz)
 	router.GET("/webhook", h.verifyWebhook)
 	router.POST("/webhook", h.receiveWebhook)
-	if deps.Sender != nil || deps.Media != nil || deps.Events != nil {
+	if deps.Sender != nil || deps.Media != nil || deps.Events != nil || deps.Sessions != nil || deps.Async != nil {
 		v1 := router.Group("/v1", requireAPIKey(newKeyRing(deps.APIKeys), deps.Logger))
 		if deps.Sender != nil {
 			v1.POST("/messages", h.sendMessage)
@@ -62,6 +64,12 @@ func NewRouter(deps Deps) *gin.Engine {
 			v1.POST("/media", h.uploadMedia)
 			v1.GET("/media/:id", h.downloadMedia)
 			v1.DELETE("/media/:id", h.deleteMedia)
+		}
+		if deps.Async != nil {
+			v1.GET("/messages/:id", h.messageStatus)
+		}
+		if deps.Sessions != nil {
+			v1.GET("/sessions/:phone", h.checkSession)
 		}
 		if deps.Events != nil {
 			v1.GET("/events/failed", h.listFailedEvents)

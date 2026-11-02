@@ -25,6 +25,7 @@ type InboundRecord struct {
 	DedupKey       string
 	DedupExpiresAt time.Time
 	Entry          OutboxEntry
+	Session        *SessionTouch
 }
 
 type OutboxStats struct {

@@ -62,7 +62,11 @@ func (h *handler) sendMessage(c *gin.Context) {
 
 	message, problem := parseSendRequest(body, c.GetHeader(correlationHeader))
 	if problem == "" {
-		message.IdempotencyKey, problem = parseIdempotencyKey(c.GetHeader(idempotencyHeader))
+		message.IdempotencyKey, problem = parseIdempotencyKey(c.GetHeader(idempotencyHeader), idempotencyHeader)
+	}
+	isAsync := false
+	if problem == "" {
+		isAsync, problem = parseAsync(c.Query(asyncQuery))
 	}
 	if problem != "" {
 		h.rejectSend(c, logger, message, started, http.StatusBadRequest, errorBody{Code: core.CodeInvalidRequest, Message: problem})
@@ -70,6 +74,10 @@ func (h *handler) sendMessage(c *gin.Context) {
 	}
 	if message.CorrelationID != "" {
 		c.Header(correlationHeader, message.CorrelationID)
+	}
+	if isAsync {
+		h.enqueueMessage(c, logger, message, started)
+		return
 	}
 
 	result, err := h.deps.Sender.Send(c.Request.Context(), message)
@@ -191,19 +199,19 @@ func parseSendRequest(body []byte, headerCorrelationID string) (core.OutboundMes
 	return message, ""
 }
 
-func parseIdempotencyKey(header string) (string, string) {
-	if header == "" {
+func parseIdempotencyKey(value, label string) (string, string) {
+	if value == "" {
 		return "", ""
 	}
-	if len(header) > maxIdempotencyKeyLength {
-		return "", fmt.Sprintf("%s must be at most %d characters", idempotencyHeader, maxIdempotencyKeyLength)
+	if len(value) > maxIdempotencyKeyLength {
+		return "", fmt.Sprintf("%s must be at most %d characters", label, maxIdempotencyKeyLength)
 	}
-	for _, character := range header {
+	for _, character := range value {
 		if character < '!' || character > '~' {
-			return "", fmt.Sprintf("%s must use printable ASCII without spaces", idempotencyHeader)
+			return "", fmt.Sprintf("%s must use printable ASCII without spaces", label)
 		}
 	}
-	return header, ""
+	return value, ""
 }
 
 func decodeStringField(fields map[string]json.RawMessage, key string, target *string) string {
@@ -232,7 +240,7 @@ func statusForCode(code string) int {
 	switch code {
 	case core.CodeInvalidRequest:
 		return http.StatusBadRequest
-	case core.CodeMediaNotFound, core.CodeEventNotFound:
+	case core.CodeMediaNotFound, core.CodeEventNotFound, core.CodeMessageNotFound:
 		return http.StatusNotFound
 	case core.CodePayloadTooLarge:
 		return http.StatusRequestEntityTooLarge

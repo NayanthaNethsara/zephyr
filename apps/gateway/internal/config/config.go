@@ -29,6 +29,8 @@ type Config struct {
 	TransportTopicPrefix string        `koanf:"transport_topic_prefix"`
 	WebhookURL           string        `koanf:"webhook_url"`
 	WebhookSigningSecret string        `koanf:"webhook_signing_secret"`
+	NATSURL              string        `koanf:"nats_url"`
+	PhoneHashKey         string        `koanf:"phone_hash_key"`
 	RetryMaxAttempts     int           `koanf:"retry_max_attempts"`
 	RetryBaseDelay       time.Duration `koanf:"retry_base_delay"`
 	DedupTTL             time.Duration `koanf:"dedup_ttl"`
@@ -38,6 +40,7 @@ type Config struct {
 	WAAccessToken        string        `koanf:"wa_access_token"`
 	APIKeys              string        `koanf:"api_keys"`
 	IdempotencyTTL       time.Duration `koanf:"idempotency_ttl"`
+	RateLimitMPS         int           `koanf:"rate_limit_mps"`
 }
 
 func defaultValues() map[string]any {
@@ -53,6 +56,7 @@ func defaultValues() map[string]any {
 		"failed_retention":       "168h",
 		"meta_api_version":       "v24.0",
 		"idempotency_ttl":        "24h",
+		"rate_limit_mps":         80,
 	}
 }
 
@@ -106,9 +110,11 @@ func (c Config) validate() error {
 		c.validatePort,
 		c.validateLogLevel,
 		c.validateMeta,
+		c.validatePhoneHashKey,
 		c.validateStorage,
 		c.validateTransport,
 		c.validateRetry,
+		c.validateRateLimit,
 		c.validateSending,
 		c.validateAPIKeys,
 	}
@@ -145,6 +151,13 @@ func (c Config) validateMeta() error {
 	return nil
 }
 
+func (c Config) validatePhoneHashKey() error {
+	if len(c.PhoneHashKey) < minAPIKeyLength {
+		return fmt.Errorf("PHONE_HASH_KEY must be at least %d characters, generate one with openssl rand -hex 32", minAPIKeyLength)
+	}
+	return nil
+}
+
 func (c Config) validateStorage() error {
 	if !strings.HasPrefix(c.DBURL, sqliteScheme) || c.SQLitePath() == "" {
 		return fmt.Errorf("DB_URL must be a sqlite:// URL, got %q", c.DBURL)
@@ -153,12 +166,28 @@ func (c Config) validateStorage() error {
 }
 
 func (c Config) validateTransport() error {
-	if c.Transport != "http" {
-		return fmt.Errorf("TRANSPORT %q is not supported yet, use http", c.Transport)
-	}
 	if c.TransportTopicPrefix == "" {
 		return errors.New("TRANSPORT_TOPIC_PREFIX must not be empty")
 	}
+	switch c.Transport {
+	case "http":
+		return c.validateWebhookTarget()
+	case "nats":
+		return c.validateNATS()
+	default:
+		return fmt.Errorf("TRANSPORT %q is not supported, use http or nats", c.Transport)
+	}
+}
+
+func (c Config) validateNATS() error {
+	target, err := url.Parse(c.NATSURL)
+	if err != nil || (target.Scheme != "nats" && target.Scheme != "tls") || target.Host == "" {
+		return fmt.Errorf("NATS_URL must be a nats:// or tls:// URL when TRANSPORT is nats, got %q", c.NATSURL)
+	}
+	return nil
+}
+
+func (c Config) validateWebhookTarget() error {
 	target, err := url.Parse(c.WebhookURL)
 	if err != nil || (target.Scheme != "http" && target.Scheme != "https") || target.Host == "" {
 		return fmt.Errorf("WEBHOOK_URL must be an http or https URL, got %q", c.WebhookURL)
@@ -182,6 +211,13 @@ func (c Config) validateRetry() error {
 		if value <= 0 {
 			return fmt.Errorf("%s must be greater than zero", name)
 		}
+	}
+	return nil
+}
+
+func (c Config) validateRateLimit() error {
+	if c.RateLimitMPS < 1 {
+		return fmt.Errorf("RATE_LIMIT_MPS must be at least 1, got %d", c.RateLimitMPS)
 	}
 	return nil
 }
